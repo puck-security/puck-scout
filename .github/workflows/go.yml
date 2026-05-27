@@ -1,0 +1,99 @@
+name: Go CI
+
+on:
+  pull_request:
+    paths:
+      - 'mcp/**'
+      # Shared with Rust (cross-language corpus parity).  A change here
+      # has to pass both this workflow and rust.yml.
+      - 'policy/policy.toml'
+      - 'testdata/policy-corpus.json'
+      - '.github/workflows/go.yml'
+
+jobs:
+  # Per-PR build + test gauntlet across every OS we ship for.  Catches
+  # OS-specific regressions (e.g., W1's gofrs/flock work) before they
+  # land on main and surface at release-tag time.
+  check:
+    name: Go ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: mcp
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # Keep in sync with mcp/go.mod's `go` directive (currently 1.24,
+          # bumped by W1 when gofrs/flock was added).
+          go-version-file: mcp/go.mod
+          cache-dependency-path: mcp/go.sum
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      # Race detector also runs without it; -race covers the plain case
+      # plus instrumentation.  No need for two separate `go test` runs.
+      - name: Test (with race detector)
+        run: go test -race ./...
+
+  # Linux-only checks: gofmt + staticcheck + cross-language corpus parity.
+  # Don't need to run these per-OS; they exercise tooling, not the binary.
+  lint:
+    name: Go lint + corpus parity
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mcp
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: mcp/go.mod
+          cache-dependency-path: mcp/go.sum
+
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Unformatted files:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Run corpus parity test (Go)
+        working-directory: .
+        run: |
+          make -C mcp policy
+          cd mcp && PUCK_RUN_CORPUS=1 go test -run TestCorpusParity ./internal/policy/...
+
+      - name: Install staticcheck
+        run: go install honnef.co/go/tools/cmd/staticcheck@latest
+
+      - name: Staticcheck
+        run: staticcheck ./...
+
+  # Install-script smoke tests run on both Unix flavours since the script
+  # itself has macOS/Linux branches (launchd vs systemd).
+  install-scripts:
+    name: Install scripts smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install scripts smoke
+        working-directory: .
+        run: bash test/install_test.sh

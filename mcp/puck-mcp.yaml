@@ -1,0 +1,31 @@
+mcp_listen:   "127.0.0.1:50280"
+agent_listen: "0.0.0.0:50281"
+mcp_token:    ""   # REQUIRED — generate with `openssl rand -hex 32` and set explicitly
+
+# Transport & auth
+ca_cert_path:        "/etc/puck-mcp/ca.pem"
+ca_key_path:         "/etc/puck-mcp/ca-key.pem"
+server_cert_path:    "/etc/puck-mcp/server.pem"
+server_key_path:     "/etc/puck-mcp/server-key.pem"
+server_cert_sans:    ["puck-mcp.local", "127.0.0.1", "::1"]
+bootstrap_token_dir: "/var/lib/puck-mcp"
+
+investigation_dir: "./investigations"
+global_audit_log: "./audit.jsonl"
+skills_dir: "../skills"
+max_turns: 5
+max_commands_per_investigation: 200
+agent_stale_timeout: 300
+
+# Command policy is compiled in from policy/policy.toml — there is no
+# command_whitelist or policy_engine knob in this file.  To extend the
+# policy for a specific host (e.g. add a binary your skill needs that
+# isn't in the upstream grammar), drop a TOML file at
+# /etc/puck/policy-overrides.toml and reference it here:
+#
+#   policy_overrides_path: /etc/puck/policy-overrides.toml
+#
+# Overrides can enable/disable existing entries on this host but
+# cannot author new grammar — adding a new binary requires a PR to
+# policy/policy.toml with corpus vectors and CI parity-gate
+# verification.

@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/puck-security/puck-oss/skills/schema/skill-schema.json",
+  "title": "Puck Skill Definition",
+  "description": "Schema for guidance-based Puck investigation skill YAML files.",
+  "type": "object",
+  "required": ["name", "version", "description", "category", "guidance", "inputs", "expected_duration"],
+  "additionalProperties": false,
+  "properties": {
+    "name": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "description": { "type": "string", "minLength": 10, "maxLength": 200 },
+    "category": { "type": "string", "enum": ["ir-triage", "hunt", "compliance", "inventory", "red-team"] },
+    "guidance": {
+      "type": "object",
+      "required": ["objective", "pathfinder_strategy", "fleet_strategy", "iteration_criteria", "analysis_template"],
+      "additionalProperties": false,
+      "properties": {
+        "objective": { "type": "string" },
+        "pathfinder_strategy": { "type": "string" },
+        "fleet_strategy": { "type": "string" },
+        "iteration_criteria": { "type": "string" },
+        "analysis_template": { "type": "string" },
+        "remediation_guidance": { "type": "string" }
+      }
+    },
+    "inputs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "type", "description", "required"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "type": { "type": "string", "enum": ["string", "string[]", "number", "boolean"] },
+          "description": { "type": "string" },
+          "required": { "type": "boolean" },
+          "default": {}
+        }
+      }
+    },
+    "expected_duration": { "type": "string" },
+    "max_turns": { "type": "integer", "minimum": 1, "maximum": 20 },
+    "required_commands": {
+      "type": "array",
+      "description": "Commands this skill expects to invoke. Each entry matches one MCP-server allowlist pattern: a bare binary name (e.g. 'cat') for unrestricted commands, or '<binary> <subcommand prefix>' (e.g. 'aws iam get-policy', 'git ls-files') for restricted ones. The MCP server validates at skill load time; mismatches surface via puck_list_skills as status=degraded with missing_commands listed. Optional and backward-compatible.",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

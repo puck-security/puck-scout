@@ -1,0 +1,54 @@
+# ─── Rust build artifacts ─────────────────────────────────────────────
+agent/target/
+agent/puck-agent
+agent/puck-agent.exe
+
+# Per-developer cross-build config (hardcodes local llvm-mingw path).
+# Template tracked as agent/.cargo/config.toml.example; copy + edit
+# locally to enable Windows cross-build.  CI doesn't use this file.
+agent/.cargo/config.toml
+
+# ─── Go build artifacts ───────────────────────────────────────────────
+# Compiled binaries land at mcp/puck-mcp by default (no extension on
+# Unix — easy to `git add` by accident).  Catch both Unix bare name
+# and Windows .exe explicitly, plus a wildcard for any stray builds.
+mcp/bin/
+mcp/puck-mcp
+mcp/puck-mcp.exe
+mcp-bin/
+*.exe
+*.test
+
+# ─── Editor / OS noise ────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ─── Environment / local config ───────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# Local MCP config (written by make test-install with absolute paths)
+.mcp.json
+
+# Local Claude Code per-project settings
+**/.claude/
+test/.claude/
+
+# ─── Runtime artifacts ────────────────────────────────────────────────
+investigations/
+audit.jsonl
+demo/configs/
+demo/.demo-pids
+drop_files/
+
+# ─── Test harness output ──────────────────────────────────────────────
+test/stage/
+test/out/
+test/nohup.out
+bin-build/

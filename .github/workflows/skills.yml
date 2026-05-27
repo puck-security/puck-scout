@@ -1,0 +1,65 @@
+name: Skills Validation
+
+on:
+  pull_request:
+    paths:
+      - 'skills/**'
+      - 'policy/policy.toml'
+      - 'mcp/internal/policy/**'
+      - 'mcp/cmd/puck-mcp/audit_skill.go'
+
+jobs:
+  validate:
+    name: Validate skill schemas
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install ajv-cli
+        run: npm install -g ajv-cli ajv-formats
+
+      - name: Validate all skill.yaml files
+        run: |
+          schema="skills/schema/skill-schema.json"
+          failed=0
+          for skill_file in skills/*/skill.yaml; do
+            echo "Validating $skill_file..."
+            if ! ajv validate -s "$schema" -d "$skill_file" --spec=draft2020 -c ajv-formats; then
+              echo "FAILED: $skill_file"
+              failed=1
+            fi
+          done
+          if [ "$failed" -eq 1 ]; then
+            echo "One or more skill files failed validation."
+            exit 1
+          fi
+          echo "All skill files validated successfully."
+
+  audit:
+    name: Audit skill prose vs required_commands
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Build puck-mcp
+        working-directory: mcp
+        run: go build ./cmd/puck-mcp
+
+      - name: Run audit-skill against all production skills
+        working-directory: mcp
+        run: |
+          # audit-skill exits 1 if any skill mentions a policy-known binary in
+          # its prose that isn't covered by required_commands.  Catches the
+          # drift class where a skill author adds a new command to a
+          # pathfinder/fleet phase but forgets to update the YAML — that
+          # drift previously only surfaced at investigation time as silent
+          # rejection from the policy engine.
+          ./puck-mcp audit-skill ../skills/

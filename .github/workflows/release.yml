@@ -1,0 +1,381 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+
+permissions:
+  contents: write  # required to create GitHub releases
+  id-token: write  # required for cosign keyless OIDC signing
+
+jobs:
+  # ── Agent (Rust) ────────────────────────────────────────────────────────────
+  #
+  # Linux: both targets on one amd64 runner. arm64 cross-compiles via the
+  # standard GNU aarch64 linker — no specialty runner needed.
+  #
+  # macOS: both targets on one ARM runner. Apple's SDK supports both
+  # architectures natively, so x86_64 is just an extra rustup target.
+  # Darwin cannot be targeted from Linux without osxcross + SDK wrangling,
+  # so a macOS runner is still required here.
+  #
+  # Windows: native MSVC runner for both amd64 and arm64. The arm64 MSVC
+  # cross-toolchain is included in windows-latest images.
+  build-agent-linux:
+    name: agent / linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu
+
+      - name: Install aarch64 cross linker
+        run: sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            agent/target
+          key: cargo-linux-${{ hashFiles('agent/Cargo.lock') }}
+          restore-keys: cargo-linux-
+
+      - name: Build linux-amd64
+        working-directory: agent
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+
+      - name: Build linux-arm64
+        working-directory: agent
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: cargo build --release --target aarch64-unknown-linux-gnu
+
+      - name: Stage binaries
+        run: |
+          cp agent/target/x86_64-unknown-linux-gnu/release/puck-agent puck-agent-linux-amd64
+          cp agent/target/aarch64-unknown-linux-gnu/release/puck-agent puck-agent-linux-arm64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-linux
+          path: puck-agent-linux-*
+          if-no-files-found: error
+
+  build-agent-macos:
+    name: agent / macos
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            agent/target
+          key: cargo-macos-${{ hashFiles('agent/Cargo.lock') }}
+          restore-keys: cargo-macos-
+
+      - name: Build darwin-arm64
+        working-directory: agent
+        run: cargo build --release --target aarch64-apple-darwin
+
+      - name: Build darwin-amd64
+        working-directory: agent
+        run: cargo build --release --target x86_64-apple-darwin
+
+      - name: Stage binaries
+        run: |
+          cp agent/target/aarch64-apple-darwin/release/puck-agent puck-agent-darwin-arm64
+          cp agent/target/x86_64-apple-darwin/release/puck-agent puck-agent-darwin-amd64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-macos
+          path: puck-agent-darwin-*
+          if-no-files-found: error
+
+  build-agent-windows:
+    name: agent / windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc,aarch64-pc-windows-msvc
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            agent/target
+          key: cargo-windows-${{ hashFiles('agent/Cargo.lock') }}
+          restore-keys: cargo-windows-
+
+      - name: Build windows-amd64
+        working-directory: agent
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Build windows-arm64
+        working-directory: agent
+        run: cargo build --release --target aarch64-pc-windows-msvc
+
+      - name: Stage binaries
+        run: |
+          copy agent\target\x86_64-pc-windows-msvc\release\puck-agent.exe puck-agent-windows-amd64.exe
+          copy agent\target\aarch64-pc-windows-msvc\release\puck-agent.exe puck-agent-windows-arm64.exe
+        shell: cmd
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-windows
+          path: puck-agent-windows-*.exe
+          if-no-files-found: error
+
+  # ── MCP server (Go) ─────────────────────────────────────────────────────────
+  build-mcp:
+    name: mcp / ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            name: linux-amd64
+          - goos: linux
+            goarch: arm64
+            name: linux-arm64
+          - goos: darwin
+            goarch: amd64
+            name: darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            name: darwin-arm64
+          - goos: windows
+            goarch: amd64
+            name: windows-amd64
+            ext: .exe
+          - goos: windows
+            goarch: arm64
+            name: windows-arm64
+            ext: .exe
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: mcp/go.mod
+          cache-dependency-path: mcp/go.sum
+
+      # Embed a Windows PE resource block (CompanyName, LegalCopyright,
+      # FileDescription, version) into puck-mcp.exe so Windows File
+      # Properties → Details shows real provenance.  goversioninfo
+      # emits a resource_windows_<arch>.syso file in the package
+      # directory; the Go linker automatically includes any *.syso it
+      # finds at build time.  No-op for non-Windows matrix legs.
+      - name: Embed Windows resource (.syso)
+        if: matrix.goos == 'windows'
+        working-directory: mcp/cmd/puck-mcp
+        # Tag looks like 'v0.3.0' — strip the leading 'v' and split into
+        # Major.Minor.Patch.  Defaults to 0 if any segment is missing
+        # (handles dev pushes that somehow land on this workflow).
+        run: |
+          go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@v1.4.1
+          VERSION_RAW="${GITHUB_REF_NAME#v}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION_RAW"
+          MAJOR=${MAJOR:-0}; MINOR=${MINOR:-0}; PATCH=${PATCH:-0}
+          ARM_FLAG=$([ "${{ matrix.goarch }}" = "arm64" ] && echo "-arm" || echo "")
+          goversioninfo \
+            -64 $ARM_FLAG \
+            -ver-major="$MAJOR" -ver-minor="$MINOR" -ver-patch="$PATCH" \
+            -product-ver-major="$MAJOR" -product-ver-minor="$MINOR" -product-ver-patch="$PATCH" \
+            -file-version="${VERSION_RAW:-0.0.0}" \
+            -product-version="${VERSION_RAW:-0.0.0}" \
+            -o "resource_windows_${{ matrix.goarch }}.syso" \
+            versioninfo.json
+
+      - name: Build
+        working-directory: mcp
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        # ldflags inject:
+        #   -s -w               strip debug + symbols (smaller binary)
+        #   -trimpath           remove absolute build paths from the binary
+        #   -X main.version     git tag that triggered this workflow (e.g. v0.3.0)
+        #   -X main.commit      full SHA so 'puck-mcp version' identifies the build
+        #   -X main.buildDate   UTC RFC3339 timestamp
+        # See main.go for the matching variable declarations.
+        run: |
+          BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          go build -trimpath -ldflags="-s -w \
+            -X main.version=${GITHUB_REF_NAME} \
+            -X main.commit=${GITHUB_SHA} \
+            -X main.buildDate=${BUILD_DATE}" \
+            -o ../puck-mcp-${{ matrix.name }}${{ matrix.ext }} ./cmd/puck-mcp/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: puck-mcp-${{ matrix.name }}
+          path: puck-mcp-${{ matrix.name }}${{ matrix.ext }}
+          if-no-files-found: error
+
+  # ── GitHub Release ───────────────────────────────────────────────────────────
+  release:
+    name: Create release
+    runs-on: ubuntu-latest
+    needs: [build-agent-linux, build-agent-macos, build-agent-windows, build-mcp]
+    # 'hashes' output is the base64-encoded sha256sum manifest the SLSA
+    # provenance job consumes.  It enumerates exactly the subjects that
+    # the attestation will cover, so the SLSA reusable workflow can sign
+    # a single attestation for the full release.
+    outputs:
+      hashes: ${{ steps.hashes.outputs.hashes }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Package skills
+        run: tar -czf dist/puck-oss-skills.tar.gz -C skills .
+
+      - name: Bundle install scripts
+        run: |
+          cp scripts/install-agent.sh dist/install-agent.sh
+          cp scripts/setup-mcp.sh dist/setup-mcp.sh
+
+      # SBOMs for transparency — one per component, scanned from source
+      # (Cargo.lock + go.sum) so transitive deps are captured.  Useful
+      # to anyone auditing what code went into the binaries.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Install syft
+        # Pinned version closes the supply-chain gap of an auto-updating
+        # action installer.  Single Go binary via the module proxy.
+        run: go install github.com/anchore/syft/cmd/syft@v1.13.0
+      - name: Generate SBOMs (one per component, SPDX JSON)
+        run: |
+          syft scan dir:agent -o spdx-json=dist/puck-agent.sbom.spdx.json
+          syft scan dir:mcp   -o spdx-json=dist/puck-mcp.sbom.spdx.json
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum puck-agent-* puck-mcp-* puck-oss-skills.tar.gz *.sbom.spdx.json | tee SHA256SUMS
+
+      # Keyless cosign signing via GitHub OIDC.  No long-lived key
+      # material — the signature includes the certificate that bound
+      # this specific workflow run + tag + repo to the signing identity.
+      # Verifiers check the cert chain back to the Sigstore root and
+      # the cert's identity claim against an expected pattern (this
+      # repo, this workflow path).  Reference verification command:
+      #
+      #   cosign verify-blob \
+      #       --certificate-identity-regexp \
+      #         "https://github.com/puck-security/puck-oss/.github/workflows/release.yml@.*" \
+      #       --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+      #       --signature <file>.sig --certificate <file>.cert \
+      #       <file>
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+      - name: Sign every release artifact (keyless)
+        working-directory: dist
+        # Sign each binary and SBOM individually so a consumer can
+        # verify any single download without also fetching SHA256SUMS.
+        # SHA256SUMS itself is still signed below as a one-stop manifest.
+        run: |
+          set -euo pipefail
+          for f in puck-agent-* puck-mcp-* puck-oss-skills.tar.gz *.sbom.spdx.json; do
+            [ -f "$f" ] || continue
+            case "$f" in *.sig|*.cert) continue;; esac
+            cosign sign-blob --yes \
+              --output-signature "${f}.sig" \
+              --output-certificate "${f}.cert" \
+              "$f"
+          done
+      - name: Sign SHA256SUMS (keyless)
+        working-directory: dist
+        run: |
+          cosign sign-blob --yes \
+            --output-signature SHA256SUMS.sig \
+            --output-certificate SHA256SUMS.cert \
+            SHA256SUMS
+
+      # Subjects for SLSA provenance.  Single base64-encoded blob of
+      # 'sha256-hex  filename' lines — the SLSA reusable workflow
+      # decodes this and signs an attestation covering exactly these
+      # subjects.  Order doesn't matter; content does.
+      - name: Hashes for SLSA provenance
+        id: hashes
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          hashes=$(sha256sum puck-agent-* puck-mcp-* puck-oss-skills.tar.gz *.sbom.spdx.json | base64 -w0)
+          echo "hashes=$hashes" >> "$GITHUB_OUTPUT"
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/puck-agent-*
+            dist/puck-mcp-*
+            dist/puck-oss-skills.tar.gz
+            dist/install-agent.sh
+            dist/setup-mcp.sh
+            dist/*.sbom.spdx.json
+            dist/SHA256SUMS
+            dist/SHA256SUMS.sig
+            dist/SHA256SUMS.cert
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+
+  # ── SLSA Level 3 provenance ─────────────────────────────────────────────────
+  # Generates an in-toto attestation per release, signed via GitHub OIDC,
+  # attesting which workflow run + commit + build environment produced
+  # the artifacts.  Verifiable downstream with slsa-verifier:
+  #
+  #   slsa-verifier verify-artifact \
+  #     --provenance-path multiple.intoto.jsonl \
+  #     --source-uri github.com/puck-security/puck-oss \
+  #     --source-tag v0.3.0 \
+  #     puck-agent-linux-amd64
+  #
+  # We use the upstream tag rather than a SHA pin: the SLSA generator's
+  # provenance subject path embeds its own tag, and SHA-pinning the
+  # reusable workflow line breaks downstream verification.  Trust model:
+  # we accept reliance on slsa-framework maintainers (Google + OpenSSF).
+  provenance:
+    needs: [release]
+    permissions:
+      actions: read       # required for the generator to read run metadata
+      id-token: write     # OIDC token for Sigstore signing
+      contents: write     # to attach the attestation to the release
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.0.0
+    with:
+      base64-subjects: ${{ needs.release.outputs.hashes }}
+      upload-assets: true

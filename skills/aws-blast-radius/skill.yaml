@@ -1,0 +1,698 @@
+name: aws-blast-radius
+version: "1.1.0"
+description: "Characterize AWS principals from discovered AccessKeyIds: account, IAM user/role, attached policies, last-used activity, session validity window, dangerous-action simulation, and recent CloudTrail."
+category: ir-triage
+
+guidance:
+  objective: |
+    Take a set of AWS AccessKeyIds (typically surfaced by the
+    credential-exposure skill) and characterize the principal each one
+    belongs to: which account, which IAM user or role, what policies
+    are attached, when the key was last used, what dangerous actions
+    the principal can effectively perform, and what API calls the key
+    has actually been making in the recent past.
+
+    The output is a per-principal blast-radius assessment that tells
+    the responder which keys to rotate first and what to assume each
+    key has already touched.
+
+    OPERATING ENVELOPE — read this twice:
+
+    - The agent uses the **endpoint's own AWS auth** for every call.
+      It does NOT load or test-drive the discovered AccessKeyId. We
+      treat the discovered key as already compromised; no point in
+      probing with it.
+    - The agent runs only read-only AWS API calls from a curated
+      allowlist. No mutations. No `aws iam create-*`, no
+      `aws iam delete-*`, no `aws iam attach-*`, no
+      `aws iam put-*`, no `aws sts assume-role`. The allowlist
+      enforces this; if the AI emits a write call it will be rejected.
+    - This skill is operator-invoked. It is NOT autonomously chained
+      from credential-exposure or any other hunt skill — those skills
+      surface AccessKeyIds; the responder makes the explicit call to
+      run blast-radius.
+    - Skill produces side effects in the operator's AWS account
+      (CloudTrail entries for the agent's own principal, recording
+      these read calls). That is acceptable for an explicitly-invoked
+      IR action and matches what the responder would log if they ran
+      these calls from the console.
+
+    DON'T CRY WOLF — read this before assigning severity:
+
+      Engineers routinely have valid SSO sessions on their endpoints;
+      that is how they do their work with the AWS CLI. Flagging every
+      active session as CRITICAL trains analysts to ignore the skill.
+      Severity must combine THREE dimensions, not just one:
+
+        1. Authority — what the principal can do (Admin / Power /
+           IAM-Full vs. scoped / read-only).
+        2. Session validity — can the credential be used RIGHT NOW
+           (ACTIVE), or is it latent until the user re-authenticates
+           (EXPIRED), or is it a long-lived IAM key with no session
+           dimension?
+        3. Account context — is this a declared production account,
+           a declared dev/sandbox, a role-name heuristic guess, or
+           genuinely UNCLEAR? Operator-supplied prod_account_ids and
+           dev_account_ids inputs take priority; in the absence of
+           those, role-name heuristics provide a best-effort
+           classification.
+
+      Severity tiers (v1.1):
+
+      Long-lived IAM keys (AKIA prefix):
+        CRITICAL — AdministratorAccess attached; OR effective allowed
+                   actions include iam:* / s3:Delete* / kms:Decrypt /
+                   secretsmanager:GetSecretValue AND key was used in
+                   the last 24h
+        HIGH     — Effective dangerous actions present but key is
+                   stale (>30d); OR PowerUserAccess / IAMReadOnlyAccess
+                   + write in inline policy
+        MEDIUM   — No admin / persistence permissions; key last-used
+                   >30d; bounded scope policies
+        INFO     — `iam get-access-key-last-used` returns NoSuchEntity
+                   (key already revoked) — confirm and downgrade
+
+      Session-bearing credentials (ASIA prefix / SSO cache entries):
+        Use this severity matrix. The session-validity column applies
+        ONLY to ASIA/SSO; long-lived keys never appear under EXPIRED.
+
+        Authority     | Context              | ACTIVE   | EXPIRED
+        --------------|----------------------|----------|---------
+        Admin/Power/  | PROD-DECLARED        | CRITICAL | MEDIUM
+        IAM-Full      | PROD-HEURISTIC       | HIGH     | MEDIUM
+                      | UNCLEAR              | HIGH     | LOW
+                      | DEV-HEURISTIC        | MEDIUM   | LOW
+                      | DEV-DECLARED         | MEDIUM   | INFO
+        --------------|----------------------|----------|---------
+        Bounded /     | PROD-DECLARED        | MEDIUM   | LOW
+        scoped        | PROD-HEURISTIC       | MEDIUM   | LOW
+                      | UNCLEAR              | LOW      | INFO
+                      | DEV-HEURISTIC        | INFO     | INFO
+                      | DEV-DECLARED         | INFO     | INFO
+
+        EXPIRED sessions never produce CRITICAL or HIGH by default.
+        Rationale: an EXPIRED session cannot be used in real time;
+        the attacker can only act if and when the legitimate user
+        runs `aws sso login` to refresh. The remediation lives on
+        a different clock — rotate or revoke BEFORE the user
+        re-authenticates, not immediately.
+
+      INCONCLUSIVE-CROSS-ACCOUNT
+        — Key belongs to a different account than the agent's
+          own auth. Surface account ID + AccessKeyId; operator
+          escalates to console session in the right account.
+
+      The skill MUST output the severity-computation reasoning in
+      each per-principal block (see analysis_template). A bare
+      severity letter is a defect — the analyst should never wonder
+      why something is CRITICAL.
+
+    Reporting policy: identifiers (AccessKeyId, account, principal
+    name, ARN, attached policy ARNs, EventNames in CloudTrail) are
+    surfaced in full. Secrets do not appear in this skill — the agent
+    never reads SecretAccessKey / SessionToken values; it operates on
+    the public AccessKeyId identifier only.
+
+  pathfinder_strategy: |
+    **OS adaptation.** This skill is `aws` CLI-only — it runs the same
+    command on every OS.  The only OS-sensitive detail is the path
+    convention for any local file the skill references (currently none,
+    but on Windows `<home>` would expand to `C:\Users\<user>`).  See
+    `puck://reference/os-adaptation` if a future step needs to read a
+    cached SSO file or credentials cache.
+
+    **Batch planning (start here).**  Before issuing tool calls, list
+    every independent AWS call you intend to make.  For independent
+    commands within one logical step (e.g., `aws iam get-user` +
+    `aws iam list-attached-user-policies`), emit them as multiple tool
+    calls in a single response so they run concurrently.  AWS API calls
+    are network-bound; serialising them burns wall time unnecessarily.
+
+    This is a single-host investigation. The AWS API is the source of
+    truth; running the same calls from multiple agents is wasteful.
+    Pick the host that has AWS auth configured (default profile,
+    SSO session, or IMDS role) and run all phases there.
+
+    Inputs come from the caller:
+      - `access_key_ids`: list of AKIA/ASIA values to investigate.
+      - `principal_arns`: optional, when the responder already knows
+        the ARN and just wants the policy + activity enumeration.
+      - `simulate` (default true): run iam simulate-principal-policy.
+      - `cloudtrail` (default true): run cloudtrail lookup-events.
+      - `time_range_days` (default 7): CloudTrail lookback window.
+
+    If `access_key_ids` is empty, parse `query` for AKIA / ASIA values
+    or paths to credential files and ask the user to confirm before
+    proceeding.
+
+    PHASE 1 — Agent context (always run first):
+      1. `aws sts get-caller-identity`
+         Records the account, ARN, and principal name the agent is
+         operating under. Defines the deep-investigatable boundary:
+         AccessKeyIds belonging to this account get full treatment;
+         others get attribution-only.
+
+    PHASE 2 — Per-key account attribution:
+      For each AccessKeyId in the input:
+      2. `aws sts get-access-key-info --access-key-id AKIAEXAMPLE`
+         Returns the account ID for the key. This works without
+         same-account auth — AWS publishes the lookup as a public
+         API. Returned shape: `{"Account": "123456789012"}`.
+
+      Branch on the result:
+        - Account matches Phase 1's account → SAME-ACCOUNT, continue
+          to Phase 3.
+        - Account differs → CROSS-ACCOUNT. Record the AccessKeyId +
+          target-account-id. Severity is INCONCLUSIVE-CROSS-ACCOUNT
+          (the responder must escalate to a console session in that
+          account; the agent's auth cannot characterize it further).
+          Skip Phases 3–6 for this key.
+
+    PHASE 3 — Same-account principal attribution:
+      3. `aws iam get-access-key-last-used --access-key-id AKIAEXAMPLE`
+         Returns: UserName (the IAM user the key belongs to),
+         LastUsedDate, ServiceName, Region.
+
+      Note: this API only returns user-keys. If the AccessKeyId
+      starts with ASIA (temporary STS session credentials), it has no
+      `get-access-key-last-used` record — the parent role is the unit
+      of investigation. In that case, the operator should pass the
+      role ARN via `principal_arns` and skip to Phase 4.
+
+      Errors:
+        - NoSuchEntity → key already revoked. Severity INFO. Confirm
+          and stop further phases for this key.
+        - AccessDenied on the agent's auth → re-check Phase 1; the
+          agent does not have iam:GetAccessKeyLastUsed in this
+          account. Stop with a degraded-result note.
+
+      Last-used tier:
+        - LastUsedDate within 24h → "active"
+        - 24h–30d → "recent"
+        - >30d → "stale"
+        - LastUsedDate absent → "never used" (key created but unused)
+
+    PHASE 4 — Policy enumeration (per principal):
+      For each user identified in Phase 3 (and each role in
+      `principal_arns`):
+
+      4a. Managed policies attached:
+          User:  `aws iam list-attached-user-policies --user-name USERNAME`
+          Role:  `aws iam list-attached-role-policies --role-name ROLENAME`
+          Returns array of {PolicyName, PolicyArn}.
+
+      4b. Inline policy NAMES:
+          User:  `aws iam list-user-policies --user-name USERNAME`
+          Role:  `aws iam list-role-policies --role-name ROLENAME`
+          Returns just the names; bodies come from 4d.
+
+      4c. Managed policy BODIES (for each ARN from 4a):
+          `aws iam get-policy --policy-arn ARN`
+            → returns {Policy: {DefaultVersionId, …}}
+          `aws iam get-policy-version --policy-arn ARN --version-id VERSION`
+            → returns the policy JSON.
+
+      4d. Inline policy BODIES (for each name from 4b):
+          User:  `aws iam get-user-policy --user-name USERNAME --policy-name NAME`
+          Role:  `aws iam get-role-policy --role-name ROLENAME --policy-name NAME`
+
+      Highlight (always CRITICAL when present):
+        arn:aws:iam::aws:policy/AdministratorAccess
+        arn:aws:iam::aws:policy/PowerUserAccess
+        arn:aws:iam::aws:policy/IAMFullAccess
+
+      Also flag:
+        - Inline policies with Action: "*" / Resource: "*"
+        - NotAction / NotResource statements (often hide broader
+          grants than the AI expects on quick read)
+        - Permissions boundary on the user (sometimes constrains a
+          loose policy — check `aws iam get-user --user-name X` for
+          PermissionsBoundary)
+
+    PHASE 5 — Effective dangerous-action simulation (gated on
+                input.simulate, default true):
+
+      For each principal (user/role ARN from Phase 3/4):
+
+      5. `aws iam simulate-principal-policy \
+            --policy-source-arn arn:aws:iam::ACCOUNT:user/NAME \
+            --action-names \
+              iam:CreateAccessKey iam:AttachUserPolicy iam:CreateUser \
+              iam:PutUserPolicy iam:PassRole sts:AssumeRole \
+              s3:DeleteBucket s3:DeleteObject s3:GetObject s3:PutObject \
+              ec2:TerminateInstances ec2:RunInstances \
+              secretsmanager:GetSecretValue ssm:GetParameter kms:Decrypt \
+              rds:DeleteDBInstance rds:CreateDBSnapshot \
+              rds:RestoreDBInstanceFromDBSnapshot \
+              cloudtrail:StopLogging cloudtrail:DeleteTrail \
+              logs:DeleteLogGroup logs:DeleteLogStream`
+
+      Returns EvaluationResults: per-action
+      PolicyEvaluationDecisionType (allowed / explicitDeny /
+      implicitDeny). Filter to allowed; that set is the "effective
+      blast radius" — the things this principal can actually do, after
+      policy evaluation accounts for inline + managed + boundary.
+
+      simulate-principal-policy is a single API call per principal
+      regardless of action count, so this is cheap. The action set
+      above is opinionated; operators can override via the
+      `simulate_actions` input on a per-investigation basis.
+
+    PHASE 6 — Recent CloudTrail activity (gated on input.cloudtrail,
+                default true):
+
+      For each AccessKeyId still in scope (same-account, not revoked):
+
+      6. `aws cloudtrail lookup-events \
+            --lookup-attributes AttributeKey=AccessKeyId,AttributeValue=AKIAEXAMPLE \
+            --max-results 50`
+
+      Optional: include `--start-time` derived from
+      input.time_range_days. CloudTrail lookup-events has a tighter
+      rate limit than IAM (about 2 TPS / 1500 per hour per account),
+      so for >5 keys the AI should pace its calls.
+
+      Summarize per key:
+        - Top 5 EventNames by count
+        - Error rate (Events with ErrorCode set / total)
+        - First / last EventTime in the window
+        - Distinct sourceIPAddress values (look for unfamiliar IPs)
+        - Resources touched (S3 buckets, secret ARNs, etc.)
+
+      The summary distinguishes:
+        - "Stale, never used" — key created, no events ever
+        - "Dormant" — no events in the lookback window
+        - "Routine" — events are typical for this principal
+                      (e.g., one EventName dominates)
+        - "Diverse" — many different EventNames, suggesting an
+                      operator was using the key interactively
+        - "Suspicious" — unfamiliar IPs, regions outside the
+                         principal's normal pattern, error spikes
+
+    PHASE 7 — Session validity & context classification (NEW in
+                v1.1.0; runs when input.sso_cache_paths is non-empty
+                OR when any access_key_id starts with `ASIA`):
+
+      Engineers routinely run `aws sso login` and operate against
+      AWS for hours. The cache files credential-exposure surfaces
+      ARE the engineer's legitimate session material — most of the
+      time, this is not "an attacker stole a credential," it's "the
+      developer is logged in." The skill MUST distinguish those two
+      cases or it cries wolf at every healthy dev workstation.
+
+      The distinguishing facts live in the cache file itself
+      (`expiresAt`, `roleName`, `accountId`, `startUrl`) plus
+      operator-supplied context (input.prod_account_ids and
+      input.dev_account_ids). The skill reads them and produces a
+      structured Session Validity finding that drives severity.
+
+      82. For each path in input.sso_cache_paths:
+          `cat <path>`
+          Extract JSON fields (do NOT surface accessToken /
+          refreshToken values — prefix-only per the credential-
+          exposure reporting policy):
+            - accessToken (record only the 4-char prefix)
+            - expiresAt (ISO 8601 timestamp; required)
+            - startUrl
+            - accountId (or "registrationKey" on registration entries)
+            - roleName (absent on registration entries — see step 83)
+            - region
+
+      83. Distinguish two kinds of SSO cache entries:
+          - Session entries: have both `accessToken` and `roleName`.
+            These are the actionable credential — they grant API
+            access AS the role until `expiresAt`. Investigate per
+            steps 84-86.
+          - Registration entries: have `clientId` + `clientSecret`,
+            no `roleName`. These bind the device to the SSO portal;
+            on their own they grant nothing, but exfiltration enables
+            impersonation on the next OAuth flow. Flag as MEDIUM,
+            note the `registrationExpiresAt`, do not run steps 84-86.
+
+      84. Compute session state (session entries only):
+          - `time_remaining = expiresAt - now`
+          - state = ACTIVE if time_remaining > 0 else EXPIRED
+          - Render the human form:
+              ACTIVE  → "expires in Xh Ym (at <ISO>)"
+              EXPIRED → "expired Xh Ym ago (at <ISO>)"
+          - When EXPIRED, note explicitly: "No real-time use is
+            possible until the legitimate user runs `aws sso login`
+            again. The remediation window closes when that refresh
+            happens; rotate or revoke access BEFORE then."
+
+      85. Classify account context (session entries only):
+
+          Priority a) Operator-declared lists. If accountId is in:
+            input.prod_account_ids → PROD-DECLARED (source: declared)
+            input.dev_account_ids  → DEV-DECLARED  (source: declared)
+            Both lists declared and accountId is in neither → UNCLEAR
+              (operator was specific; respect that).
+
+          Priority b) Role-name heuristic (only when neither list
+                       was declared, or accountId is in neither):
+            roleName contains (case-insensitive) any of:
+              "Admin", "Production", "Mgmt", "Master", "Privileged",
+              "FullAccess", "PowerUser"
+              → PROD-HEURISTIC
+            roleName contains (case-insensitive) any of:
+              "Dev", "Sandbox", "Staging", "Test", "Personal",
+              "ReadOnly", "Auditor", "View"
+              → DEV-HEURISTIC
+            Neither pattern matches → UNCLEAR
+
+          Record BOTH the classification and the reason string in
+          the output: e.g. "DEV-HEURISTIC (role name contains 'Dev')"
+          or "PROD-DECLARED (accountId 442042544837 in prod_account_ids)".
+
+      86. Apply the severity matrix from the objective. The skill
+          MUST emit the reasoning chain in the per-principal block —
+          for example:
+
+            "MEDIUM because session EXPIRED 4h 12m ago AND role is
+             AdministratorAccess (Admin authority) AND account
+             442042544837 is PROD-HEURISTIC (role name contains
+             'Admin'). Latent — rotate or revoke before next
+             `aws sso login`."
+
+          or:
+
+            "INFO because session ACTIVE for 6h 28m more AND role
+             is DeveloperReadOnly (bounded scope) AND account
+             111122223333 is DEV-DECLARED. Normal engineer
+             activity; recorded but no action expected."
+
+      87. For ASIA AccessKeyIds passed via input.access_key_ids when
+          no cache path is supplied: the skill cannot read `expiresAt`
+          from a cache file it wasn't given. Surface this honestly —
+          mark session validity as UNKNOWN-CACHE-PATH-NOT-PROVIDED
+          and recommend the operator supply the path. Do NOT guess.
+
+  fleet_strategy: |
+    Fleet fan-out is intentionally not used. The AWS APIs called here
+    are the source of truth — running them from multiple agents only
+    multiplies CloudTrail entries and IAM rate-limit pressure for no
+    information gain. Pick one agent that has AWS auth and run all
+    phases there.
+
+    If the responder needs to characterize keys across multiple AWS
+    accounts (e.g. one set of AccessKeyIds belongs to account A, the
+    rest to account B), invoke this skill once per account from an
+    agent whose auth maps to that account. Phase 2's account-attribution
+    step makes the cross-account case visible immediately.
+
+  iteration_criteria: |
+    **Iterate in batches.**  When findings prompt multiple independent
+    follow-up AWS calls, batch them: use `puck_run_batch` to dispatch
+    several `aws ...` tuples in one call, or emit multiple parallel
+    tool calls in one response.  AWS calls are network-bound;
+    serialising burns wall time.
+
+    Continue iterating when:
+      - Phase 4 surfaced a managed policy whose body has not yet been
+        retrieved (4c).
+      - A user has a permissions boundary that has not yet been read.
+      - simulate=true and not every principal has a simulate result.
+      - cloudtrail=true and not every same-account AccessKeyId has a
+        lookback summary.
+      - The principal is a role and the trust policy / assume-role
+        chain has not yet been followed (one hop is usually enough;
+        do not recurse indefinitely).
+
+    Stop iterating when:
+      - Every same-account AccessKeyId has phases 3–4 complete and
+        (gated) phases 5–6 complete.
+      - Every cross-account key has been recorded with account ID and
+        marked INCONCLUSIVE.
+      - max_turns is approaching — write the report rather than
+        chasing additional principals.
+
+  analysis_template: |
+    **Lead with the TL;DR block.**  Before the per-principal severity
+    matrix below, the report MUST start with the
+    `## TL;DR — analyst quick read` + `## Indicators` blocks defined in
+    the `puck://reference/analyst-tldr-template` resource.  For
+    aws-blast-radius the Verdict reflects the worst principal in the
+    set: CLEAN (no principals reachable) / NORMAL-USE (low-privilege
+    keys consistent with the host's role) / NOTABLE (over-scoped or
+    stale keys, recoverable hygiene issue) / CONCERNING (admin or
+    *:*-scoped key on inappropriate host) / ACTIVE-COMPROMISE
+    (CloudTrail shows live attacker action from one of the discovered
+    keys).  Indicators.pivots.aws_accounts must list the canonical
+    account-id per AWS account, not every AKIA's account.
+
+    After the TL;DR + Indicators, render the detailed report:
+
+    ## AWS Blast Radius Report — <ISO timestamp>
+
+    ### Agent Context (REQUIRED)
+    Account: <ID>;  Principal: <ARN>;  Region: <region>
+    This is the only account in which deep enumeration was performed;
+    AccessKeyIds belonging to other accounts appear below as
+    INCONCLUSIVE-CROSS-ACCOUNT.
+
+    ### Finding Index
+    One line per AccessKeyId, ordered by severity (CRITICAL first).
+    Each line carries the session-validity hint so the analyst can
+    scan urgency without reading every block:
+      [CRITICAL] AKIAEXAMPLE12345678 → user "prod-admin" in
+                 123456789012 (PROD-DECLARED), AdministratorAccess
+                 attached, long-lived IAM, last-used 2h ago
+      [HIGH]     ASIAEXAMPLEABC123 → role "PowerUser" in
+                 222233334444 (PROD-HEURISTIC), session ACTIVE
+                 (expires in 5h 12m)
+      [MEDIUM]   ASIAEXAMPLEXYZ789 → role "AdministratorAccess" in
+                 442042544837 (PROD-HEURISTIC), session EXPIRED
+                 (4h 12m ago) — latent, rotate before next sso login
+      [INFO]     ASIAEXAMPLEHIJ456 → role "DeveloperReadOnly" in
+                 111122223333 (DEV-DECLARED), session ACTIVE
+                 (expires in 6h 28m) — normal engineer activity
+      [INCONCLUSIVE-CROSS-ACCOUNT] AKIAFOREIGN12345678 → account
+                 999999999999 (operator: escalate to console session)
+
+    ### Per-Principal Detail (REQUIRED, one block per AccessKeyId
+                                where deep enumeration ran)
+    ```
+    AccessKeyId:       <full AKIA/ASIA value>
+    Credential class:  <long-lived-iam | sso-session | sts-temporary
+                        | sso-registration>
+    Account:           <ID> (<PROD-DECLARED | DEV-DECLARED |
+                              PROD-HEURISTIC | DEV-HEURISTIC | UNCLEAR>;
+                              source: <declared | role-name match 'X'>)
+    Principal:         <user|role>: <name>
+    Principal ARN:     <full ARN>
+    Session validity:  <ACTIVE | EXPIRED | N/A (long-lived IAM key) |
+                        UNKNOWN-CACHE-PATH-NOT-PROVIDED>
+                       When ACTIVE:  "expires in 7h 32m (at 2026-05-11T22:00:00Z)"
+                       When EXPIRED: "expired 4h 12m ago (at 2026-05-11T13:48:00Z) —
+                                      no real-time use possible until refresh"
+                       For long-lived keys: "N/A — IAM access key,
+                                              see Last-used row instead"
+    SSO start URL:     <url, when source is an SSO cache>
+    Last-used (IAM):   <ISO timestamp> (<active|recent|stale|never>)
+                       or "N/A — session-bearing credential"
+    Last-used service: <service / N/A>
+    Last-used region:  <region>
+    Attached managed:  <PolicyName1> (<ARN>)
+                       <PolicyName2> (<ARN>)
+                       …
+    Inline policies:   <name1>, <name2>, …
+    Permissions boundary: <ARN or "(none)">
+    Admin flags:       AdministratorAccess=<yes|no>;
+                       PowerUserAccess=<yes|no>;
+                       IAMFullAccess=<yes|no>;
+                       any inline "*"/"*"=<yes|no>
+    Severity:          <tier>
+    Why:               <one-line reasoning combining the three axes
+                        — authority, session validity, account
+                        context. REQUIRED. Example: "MEDIUM because
+                        session EXPIRED 4h 12m ago AND role is
+                        AdministratorAccess (Admin authority) AND
+                        account 442042544837 is PROD-HEURISTIC (role
+                        name contains 'Admin'). Latent — rotate
+                        before next aws sso login.">
+    ```
+
+    ### Session Validity Summary (REQUIRED if any session-bearing
+                                     credential was investigated)
+
+    A scan-friendly table the analyst can read in five seconds to
+    triage urgency. Long-lived IAM keys are omitted from this table
+    (they have no session dimension).
+    ```
+    AccessKeyId            State    Time          Account            Context           Role                  Severity
+    ASIAEXAMPLEABC123…     ACTIVE   5h 12m left   222233334444       PROD-DECLARED     PowerUser              HIGH
+    ASIAEXAMPLEXYZ789…     EXPIRED  4h 12m ago    442042544837       PROD-HEURISTIC    AdministratorAccess    MEDIUM
+    ASIAEXAMPLEHIJ456…     ACTIVE   6h 28m left   111122223333       DEV-DECLARED      DeveloperReadOnly      INFO
+    ```
+
+    Below the table, name the rotation window for any EXPIRED admin
+    session: "The role X in account Y can be re-armed by the
+    legitimate user running `aws sso login --sso-session <name>`. To
+    cut that window, the operator should:
+      - remove the user from the permission set's group/assignment
+        in IAM Identity Center, OR
+      - rotate the permission set's role trust policy in the target
+        account
+    before that refresh happens."
+
+    ### Effective Dangerous Actions (REQUIRED if simulate=true)
+    Per principal, the subset of the simulated action list that
+    returned "allowed". A short bullet list:
+      <principal-arn>:
+        - iam:CreateAccessKey
+        - iam:AttachUserPolicy
+        - s3:DeleteBucket
+        - secretsmanager:GetSecretValue
+    If empty: "(no dangerous actions allowed within the simulated set)".
+    If simulate=false: write "Skipped (simulate=false)".
+
+    ### Recent CloudTrail Activity (REQUIRED if cloudtrail=true)
+    Per AccessKeyId:
+      Window: last <N> days
+      Total events: <count> (<error count> errors)
+      Top EventNames: <Name1>(<n>), <Name2>(<n>), <Name3>(<n>), <Name4>(<n>), <Name5>(<n>)
+      Distinct source IPs: <list> (flag any not in the principal's
+                                   usual IP set)
+      Distinct regions: <list>
+      Pattern: <Stale / Dormant / Routine / Diverse / Suspicious>
+      Notable resources: <e.g. specific bucket names, secret ARNs,
+                         RDS instance IDs>
+    If cloudtrail=false: write "Skipped (cloudtrail=false)".
+
+    ### Cross-Account Findings
+    Per cross-account AccessKeyId: AKIA…, account ID, recommended
+    next step (operator escalates to console / role-assume in that
+    account).
+
+    ### Containment Recommendations (REQUIRED, lead with this in
+                                       the LLM-rendered output)
+    1. CRITICAL — rotate immediately, suspend the IAM user/role:
+       <list of principals>
+    2. HIGH — rotate within 24 hours: <list>
+    3. MEDIUM — rotate within a week: <list>
+    4. INCONCLUSIVE — operator escalates: <list>
+
+  remediation_guidance: |
+    After the Containment Recommendations, include a ## Rotation
+    Commands section with one block per affected principal. Use the
+    actual UserName / RoleName / AccessKeyId from the findings —
+    never placeholders.
+
+    ### <principal-arn>
+    **Severity**: CRITICAL / HIGH / MEDIUM
+    **AccessKeyId**: <AKIA…>
+
+    **Step 1 — Create replacement access key (only if the IAM user
+                still needs programmatic access):**
+    ```bash
+    aws iam create-access-key --user-name <UserName>
+    # Capture the new AccessKeyId + SecretAccessKey from the response.
+    # Update the consumer (CI pipeline, .env file, secret manager)
+    # to use the new credential before disabling the old one.
+    ```
+
+    **Step 2 — Deactivate the compromised key (reversible):**
+    ```bash
+    aws iam update-access-key \
+      --user-name <UserName> \
+      --access-key-id <AKIA…> \
+      --status Inactive
+    # If anything breaks, you can flip back to Active. Wait for the
+    # CI pipeline / app to confirm the new key is in use, then move
+    # to step 3.
+    ```
+
+    **Step 3 — Delete the compromised key (irreversible):**
+    ```bash
+    aws iam delete-access-key \
+      --user-name <UserName> \
+      --access-key-id <AKIA…>
+    ```
+
+    **Step 4 — Suspend the user if the key was used by a
+                still-unidentified party (e.g., CloudTrail showed
+                events from unfamiliar IPs):**
+    ```bash
+    aws iam attach-user-policy \
+      --user-name <UserName> \
+      --policy-arn arn:aws:iam::aws:policy/AWSDenyAll
+    # Or: --put-user-policy with an explicit Deny. Suspends without
+    # removing the user, preserving CloudTrail attribution.
+    ```
+
+    **Step 5 — Investigate any cross-resource impact identified in
+                Phase 6 (CloudTrail). For each touched bucket, secret,
+                instance, etc., verify whether subsequent rotation /
+                snapshot-revert / instance-replacement is required.**
+
+    For ROLE keys (ASIA*) the deactivation path is different — the
+    role itself doesn't have an AccessKeyId to disable; the operator
+    must rotate the role's trust policy or the IAM identity that's
+    permitted to assume it. Note this in the report when the
+    AccessKeyId starts with ASIA.
+
+    Append a "Rotation Checklist" listing every AccessKeyId, the
+    user/role it belongs to, and a checkbox:
+      - [ ] AKIA… (user "prod-admin") — rotated by <date>
+      - [ ] ASIA… (role "ci-runner") — trust-policy reviewed by <date>
+
+inputs:
+  - name: query
+    type: string
+    description: "Free-form context. If access_key_ids is empty, the AI parses this for AKIA/ASIA values or refers to a recent credential-exposure investigation by ID."
+    required: true
+  - name: access_key_ids
+    type: string[]
+    description: "List of AWS AccessKeyIds (AKIA… or ASIA…) to investigate. Typically populated from credential-exposure findings."
+    required: false
+  - name: principal_arns
+    type: string[]
+    description: "Optional list of IAM user or role ARNs to investigate directly when the AccessKeyId is unknown or when investigating ASIA temporary credentials by parent role."
+    required: false
+  - name: simulate
+    type: boolean
+    description: "Run iam simulate-principal-policy for each principal against the dangerous-action default set. Default true."
+    required: false
+    default: true
+  - name: cloudtrail
+    type: boolean
+    description: "Run cloudtrail lookup-events for each AccessKeyId to surface recent activity. Default true."
+    required: false
+    default: true
+  - name: time_range_days
+    type: number
+    description: "CloudTrail lookback window in days. Default 7."
+    required: false
+    default: 7
+  - name: sso_cache_paths
+    type: string[]
+    description: "Paths to ~/.aws/sso/cache/*.json files surfaced by a prior credential-exposure run. Phase 7 reads these to extract expiresAt, accountId, roleName, and startUrl for session-validity classification. ASIA AccessKeyIds without a cache path are surfaced as UNKNOWN-CACHE-PATH-NOT-PROVIDED."
+    required: false
+  - name: prod_account_ids
+    type: string[]
+    description: "Operator-declared production AWS account IDs. Findings against these accounts skip role-name heuristics and are classified PROD-DECLARED — driving the most opinionated severity tier (active admin in declared-prod = CRITICAL)."
+    required: false
+  - name: dev_account_ids
+    type: string[]
+    description: "Operator-declared dev/sandbox AWS account IDs. Findings against these accounts are classified DEV-DECLARED — defaults toward INFO for routine engineer activity, avoiding crying wolf at every healthy SSO session."
+    required: false
+
+expected_duration: "2–10 minutes depending on number of principals and CloudTrail volume"
+max_turns: 10
+
+# Allowlist entries this skill expects. Validated at MCP server startup;
+# any missing patterns surface via puck_list_skills as status=degraded.
+# The operator adds these to puck-mcp.yaml's allowed_subcommands.aws block.
+required_commands:
+  - "aws sts get-caller-identity"
+  - "aws sts get-access-key-info"
+  # Glob forms cover everything iam/sso get-*/list-* — the policy admits
+  # the same globs, so this declaration is precise about intent rather
+  # than enumerating every specific subcommand the skill might call.
+  - "aws iam get-*"
+  - "aws iam list-*"
+  - "aws sso get-*"
+  - "aws sso list-*"
+  - "aws iam simulate-principal-policy"
+  - "aws cloudtrail lookup-events"
+  - cat

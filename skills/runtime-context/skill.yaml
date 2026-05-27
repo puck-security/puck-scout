@@ -1,0 +1,264 @@
+name: runtime-context
+version: "1.0.0"
+description: "Detect the host's runtime environment: container/VM/bare-metal, cloud (AWS/Azure/GCP/OCI), Kubernetes"
+category: inventory
+
+guidance:
+  objective: |
+    Establish the runtime context of a host BEFORE any other investigation.
+    Distinguish: container vs VM vs bare metal; which cloud (if any); which
+    orchestrator (Kubernetes/ECS/Fargate/Nomad/Cloud Foundry); IMDS
+    reachability; service-account presence.
+
+    **Run this first in any investigation.** Every other finding gets
+    reframed by runtime context. "Process listening on 169.254.169.254"
+    is normal on a cloud VM and suspicious on a laptop. "Service account
+    JSON in /var/run/secrets/" is normal in a Kubernetes pod and a
+    high-severity exposure on a bare-metal host. The same `aws sts
+    get-caller-identity` output means different things on a developer
+    machine versus an EC2 instance with an attached instance profile.
+
+    **What this skill is.** A reachability probe. It reads files
+    (`/proc/1/cgroup`, `/proc/self/mountinfo`, `/sys/class/dmi/id/sys_vendor`,
+    `/var/run/secrets/kubernetes.io/serviceaccount/...`) and makes
+    link-local IMDS calls to `http://169.254.169.254/` to disambiguate
+    AWS/Azure/GCP/OCI. It never fetches credentials, never enumerates
+    cloud resources, never auths.
+
+    **What this skill is not.** It is NOT a privilege probe. It does not
+    fetch IAM credentials from the IMDS credentials endpoint, does not
+    test whether IMDSv2 token endpoints work (just whether they're
+    reachable), does not list S3 buckets, does not pivot. Use
+    `aws-blast-radius` (or equivalent per-cloud skill) for those — they
+    take the runtime-context output as input.
+
+    **Identifier-vs-secret reporting (project rule).** Cloud account IDs,
+    project IDs, instance IDs, subscription IDs, K8s namespace names,
+    cluster names, hostnames — all identifiers, reported in full. The
+    skill never reads from IMDS endpoints that return credentials
+    (`/latest/meta-data/iam/security-credentials/<role>`); use
+    `aws-blast-radius` for that, where the agent's policy.toml carve-out
+    can be revisited per-skill.
+
+  pathfinder_strategy: |
+    **OS adaptation — Windows caveat.** This skill is `/proc`- and
+    `/sys`-based by design (cgroup detection, dmi hardware vendor,
+    container marker files).  None of those exist on Windows.  When the
+    target is Windows, the only useful probes are
+    `powershell -Command Get-ComputerInfo` (cloud / VM detection via the
+    BiosManufacturer and Model fields) and Get-Service for Hyper-V /
+    container runtime detection.  Most other phases will report
+    "unknown" — that's expected, not a bug.  A full Windows runtime
+    context port is tracked as v2 work.  See
+    `puck://reference/os-adaptation` for the Get-* translations that
+    DO apply on Windows.
+
+    **Batch planning.** Almost every probe in this skill is independent.
+    Emit them as parallel `puck_run_check` tool calls in a single
+    response. The skill is fast (1-3 minutes) when properly batched.
+
+    Tell the user up front: "I'm going to detect the runtime environment
+    of [host]: container vs VM, cloud provider, orchestrator. Read-only
+    file probes and link-local IMDS metadata calls — no credentials
+    fetched."
+
+    On ONE host:
+
+    1. **OS + user (always first).** `uname -s` → Darwin / Linux /
+       Windows-Git-Bash. `whoami`. On Darwin, skip most of the Linux
+       container/cgroup probes; macOS doesn't run as a Linux container,
+       and Darwin laptops aren't typical investigation targets for
+       runtime context (they're laptops).
+
+    2. **Container detection** (Linux only):
+       - `cat /proc/1/cgroup` — look for `docker`, `kubepods`,
+         `containerd`, `garden`, `lxc` strings. Tells you a container
+         is in use.
+       - `cat /proc/self/mountinfo` — `overlay`/`fuse-overlayfs` on `/`
+         is a container indicator; `/proc/sys` mounted read-only is
+         too. `tmpfs` on `/run/secrets` suggests Docker Swarm secrets.
+       - `cat /proc/1/sched | head -1` — PID 1 is `init` / `systemd` on
+         a VM, but on a container it's typically the entrypoint
+         command — useful sanity check.
+       - `ls /.dockerenv /run/.containerenv 2>/dev/null` — Docker and
+         Podman drop these marker files.
+
+    3. **Virtualization / bare-metal detection** (Linux):
+       - `cat /sys/class/dmi/id/sys_vendor` — common values:
+         `Amazon EC2`, `Google`, `Microsoft Corporation` (Azure or
+         Hyper-V), `OracleCloud`, `DigitalOcean`, `VMware, Inc.`,
+         `QEMU`, `innotek GmbH` (VirtualBox). A real laptop typically
+         shows the OEM (`LENOVO`, `Dell Inc.`, `Apple Inc.`).
+       - `cat /sys/class/dmi/id/product_name` — `t3.medium`, `Google
+         Compute Engine`, `Virtual Machine` (generic Azure), etc.
+       - `cat /sys/class/dmi/id/board_asset_tag` — on Azure this is
+         the Azure resource ID; on EC2 it's the instance ID
+         (`i-…`). High-precision when present.
+
+    4. **Cloud disambiguation via IMDS** — *only* if step 3 suggests
+       cloud or DMI is missing. Fan out three IMDS probes in parallel;
+       the response shape disambiguates the cloud:
+
+       - **AWS / Azure / OCI / DO / GCP-via-IP — IMDSv1 metadata
+         listing:**
+         `curl -s --max-time 2 http://169.254.169.254/latest/meta-data/`
+         → text directory listing on AWS, OCI, DigitalOcean; 404 on
+         Azure (Azure uses `/metadata/`); 200 with directory on
+         GCP via the same IP.
+
+       - **Azure-specific:**
+         `curl -s --max-time 2 -H "Metadata: true" http://169.254.169.254/metadata/instance?api-version=2021-02-01`
+         → JSON document on Azure; not-found on AWS/GCP/OCI.
+
+       - **GCP-specific:**
+         `curl -s --max-time 2 -H "Metadata-Flavor: Google" http://169.254.169.254/computeMetadata/v1/instance/id`
+         → instance ID on GCP-as-alias; not-found elsewhere.
+
+       Interpret combinations:
+       - `latest/meta-data/` succeeds AND `Metadata: true` succeeds →
+         this is unusual; flag for review.
+       - `latest/meta-data/` succeeds, `Metadata: true` 404 → AWS, OCI,
+         or DO. Read `latest/meta-data/services/partition` (AWS-specific)
+         or `latest/meta-data/instance-id`.
+       - `latest/meta-data/` 404, `Metadata: true` succeeds → Azure.
+       - `Metadata-Flavor: Google` succeeds → GCP.
+       - All three fail (or time out) → not on a cloud, or a cloud that
+         doesn't expose link-local IMDS. Note as a named outcome, not
+         "unknown."
+
+       The skill never reads from
+       `/latest/meta-data/iam/security-credentials/...` — that returns
+       the live IAM credential and is out of scope. Per-cloud blast-radius
+       skills handle that.
+
+    5. **Kubernetes / orchestrator detection:**
+       - `ls /var/run/secrets/kubernetes.io/serviceaccount/ 2>/dev/null`
+         — presence of `token`, `ca.crt`, `namespace` files = running
+         inside a K8s pod with a mounted service account.
+       - `cat /var/run/secrets/kubernetes.io/serviceaccount/namespace`
+         (if present) — the K8s namespace this pod runs in.
+       - `cat /etc/resolv.conf` — `search` line including
+         `<namespace>.svc.cluster.local` corroborates K8s.
+       - `cat /proc/1/cgroup | grep kubepods` — kubelet-managed pod.
+       - `ls /etc/eks/` — AWS EKS-specific config dir (sometimes
+         present even outside container).
+       - `ls /etc/rancher/` — Rancher / K3s indicators.
+
+    6. **ECS / Fargate / Cloud-Run:**
+       - `cat $ECS_CONTAINER_METADATA_URI_V4` is an env-var path; check
+         `ls /proc/1/environ | grep ECS_` (won't work via cat — `proc/X/environ`
+         is the right path but null-separated; use `cat /proc/1/environ` and
+         note nulls). On ECS, look for `AWS_EXECUTION_ENV=AWS_ECS_FARGATE` or
+         similar.
+       - `cat /proc/1/environ` and `cat /proc/self/environ` — search for
+         `KUBERNETES_SERVICE_HOST`, `AWS_LAMBDA_RUNTIME_API`, `K_SERVICE`
+         (Cloud Run), `FUNCTION_TARGET` (GCP Functions).
+
+    CHECKPOINT: present the runtime classification to the user — one
+    line: "Host is [container/VM/bare-metal] · [cloud or none] ·
+    [orchestrator or none] · service-account [present/absent]." Then ask
+    whether to proceed (typically yes, this skill is a precursor to
+    other skills, not a destination).
+
+  fleet_strategy: |
+    Excellent for fleet baselining: "what runtime environments are in
+    my fleet?" Run as `puck_query_fleet` for each probe; aggregate by
+    detected (cloud, orchestrator, instance_type) tuple.
+
+    Highest-value fleet correlations:
+    - Mixed cloud across hosts the operator thought were single-cloud
+      = unexpected multi-cloud sprawl.
+    - Kubernetes service-account presence on hosts NOT expected to be
+      pods = unexpected K8s topology (a developer laptop running a
+      local K8s with a real cluster's kubeconfig, for example).
+    - Hosts with `sys_vendor: Amazon EC2` but no IMDS response =
+      IMDS may be disabled (good security posture) OR IMDS endpoint
+      blocked by a security group (operator should know which).
+
+  iteration_criteria: |
+    This skill is short and converges quickly. Iterate only if:
+    - IMDS probes time out — try with a shorter `--max-time` first to
+      rule out hung-network, then conclude "not cloud."
+    - DMI vendor is ambiguous (`QEMU`, generic `Virtual Machine`) — try
+      IMDS probes anyway; the answer disambiguates.
+    - Kubernetes service-account is present — note the namespace and
+      flag for the IR engineer; if the investigation is about a
+      possible cluster compromise, recommend
+      pivoting to a K8s-aware skill (none ships yet).
+
+    Stop when the runtime classification is complete. Pass the result
+    to the next skill via `puck_save_analysis` or by recommending the
+    follow-on in the report. This skill rarely needs `puck_continue`.
+
+  analysis_template: |
+    Call `puck_save_analysis` to save the report. Structure:
+
+    RUNTIME CLASSIFICATION — one-line summary at the top:
+    `Host: [container|VM|bare-metal] · [aws|azure|gcp|oci|digitalocean|on-prem|unknown] · [k8s|ecs|fargate|cloud-run|systemd|other] · service-account [present|absent]`
+
+    EVIDENCE BY PROBE:
+    - `/proc/1/cgroup`: [container / not-container, with the matched string]
+    - `/proc/self/mountinfo`: [overlay rootfs / regular]
+    - DMI vendor + product_name + board_asset_tag (if present)
+    - IMDS results: which endpoints responded, with which response
+      shape (no credential content, just disambiguation evidence)
+    - Kubernetes service-account directory: present|absent;
+      namespace if present
+    - Container/orchestrator env vars surfaced from `/proc/1/environ`
+
+    WHY THIS MATTERS FOR THIS INVESTIGATION — one paragraph framing
+    how the runtime context reframes subsequent findings. Example:
+    "This is an EC2 instance in account 123456789012 with an attached
+    instance profile (role visible at IMDS path; not fetched). Any
+    AWS credential found in subsequent investigation steps should be
+    interpreted in this account's context. The host is not running
+    in Kubernetes, so service-account-related credentials would be
+    out of place."
+
+    RECOMMENDED NEXT SKILLS:
+    - If runtime = EC2 + instance profile → consider `aws-blast-radius`
+      using the IAM role identifier from IMDS path.
+    - If runtime = K8s pod → namespace + service-account context
+      should be carried forward when reading mounted secrets.
+    - If runtime = bare-metal laptop with unexpected cloud configs in
+      `~/.aws/` etc. → `access-history` or `credential-exposure`.
+
+    BLIND SPOTS:
+    - macOS hosts: most Linux-specific probes (`/proc/...`, `/sys/...`)
+      don't apply; runtime context is mostly "macOS laptop, probably
+      not a cloud workload." Explicit fewer probes ran.
+    - Windows: not covered in v1 (PowerShell-based detection differs).
+    - IMDS endpoint may be blocked by a security group, network ACL,
+      or local firewall — absence does not strictly prove "not cloud."
+    - IMDSv2-only EC2 instances may refuse IMDSv1 paths even from
+      localhost; this skill does an IMDSv1 listing first and treats
+      404 as ambiguous. If IMDSv1 returns 401 with "use IMDSv2",
+      that's a strong AWS signal even without a token fetch.
+
+    CONFIDENCE LEVEL — high/medium/low.
+
+inputs:
+  - name: query
+    type: string
+    description: "Optional context for the investigation (default: 'detect runtime environment')"
+    required: false
+    default: "detect runtime environment"
+
+expected_duration: "1-3 minutes"
+max_turns: 4
+
+required_commands:
+  - uname
+  - whoami
+  - ls
+  - cat
+  - file
+  - curl
+  # Skill prose references `aws-blast-radius` as a follow-up skill and
+  # mentions aws CLI in describing EC2 instance-profile context.  The
+  # skill itself only reads /proc + IMDS, never invokes aws.  Declaring
+  # the lightest aws verb satisfies the audit and signals the intended
+  # composition with downstream blast-radius skills.
+  - "aws sts get-caller-identity"
+  # Windows-side fallback — Get-ComputerInfo for the BIOS/vendor probes.
+  - "powershell -Command Get-*"

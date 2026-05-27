@@ -1,0 +1,263 @@
+name: access-history
+version: "1.0.0"
+description: "Mine shell + REPL history for inline credentials and the user's access map (hosts, roles, clusters, vaults)"
+category: hunt
+
+guidance:
+  objective: |
+    Read a user's shell history (bash, zsh, fish, PowerShell PSReadLine) and
+    REPL history (psql, mysql, sqlite, python, node) to surface two things:
+
+    1. **Inline credentials** committed to history — AWS access keys, GitHub
+       tokens, Slack tokens, Stripe keys, OAuth bearers, etc.
+    2. **An access map** — the structured graph of hosts, IAM roles, cloud
+       accounts, Kubernetes clusters/contexts, container registries, vaults,
+       and DB endpoints the user has touched. Reconstructed from
+       `ssh user@host`, `aws --profile`, `aws sts assume-role`, `gcloud config`,
+       `az login`, `kubectl use-context`, `aws eks update-kubeconfig`,
+       `docker login`, `terraform init -backend-config`, `vault kv`,
+       `psql/mysql` invocations, etc.
+
+    **The access map is usually the bigger prize.** Most mature environments
+    rotate AWS keys regularly, but their `aws sts assume-role` and
+    `kubectl use-context` invocations still reconstruct the production
+    privilege graph — durable intelligence that rotation does not erase.
+
+    **Identifier-vs-secret reporting (project rule).** Report identifiers in
+    full — account IDs, ARNs, principal names, key IDs (`AKIAEXAMPLE…`),
+    hostnames, cluster contexts, registry paths. Reduce secret values
+    (`SecretAccessKey`, OAuth/PAT token values, passwords, private-key bytes)
+    to a 4-character type prefix (`AKIA…`, `ghp_…`, `xoxb-…`) in the final
+    report. Never echo a full secret into the analysis. See
+    `docs/security.md § Trust Model` for why.
+
+    **No live verification.** Do NOT call any vendor API (AWS STS, GitHub
+    `/user`, Slack `auth.test`, etc.) to verify a found token. The agent is
+    network-isolated by design; the only legitimate way a credential becomes
+    "verified" is when the engineer rotates or investigates it out-of-band.
+
+    Detect inline secrets prefix-first (high precision), entropy-second
+    (recall), allowlist-always (suppress doc fixtures like
+    `AKIAIOSFODNN7EXAMPLE`).
+
+  pathfinder_strategy: |
+    **OS adaptation.** If `puck_investigate` advertises the target as a
+    Windows host, OR if `uname -s` errors or returns a MSYS/MINGW
+    string, consult the `puck://reference/os-adaptation` resource and
+    translate `cat` to `powershell -Command Get-Content` and `grep` to
+    `findstr`.  PSReadLine history lives at
+    `<home>\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt`;
+    cmd.exe doesn't keep persistent history.  Other history paths
+    (bash/zsh/fish) only apply if Git Bash or WSL is installed.  On
+    Windows substitute `<home>` = `C:\Users\<user>`.
+
+    **Batch planning.** Before issuing tool calls, list the history files
+    you intend to read, then dispatch the `cat` calls as parallel
+    `puck_run_check` tool calls in a single response. Don't serialise them.
+
+    Before running anything, tell the user what you're about to do:
+    "I'm going to read [user]'s shell and REPL history on [host] to find
+    inline credentials and reconstruct their access map across cloud,
+    Kubernetes, and DB endpoints."
+
+    On ONE host, run these steps:
+
+    1. **Detect OS and user.** Run `uname -s` (Darwin / Linux / MINGW64_NT
+       for Git-Bash on Windows) and `whoami`. Derive `<home>`:
+       - macOS: `<home> = /Users/<username>`
+       - Linux: `<home> = /home/<username>`
+       - Windows (PowerShell host): `<home> = C:\Users\<username>`
+       Never use `~`; the agent shells out without shell expansion.
+
+    2. **Enumerate candidate history files** with `ls -la` (not `cat` — we
+       want sizes and mtimes first):
+       - macOS/Linux: `ls -la <home>/.bash_history <home>/.zsh_history
+         <home>/.fish_history <home>/.psql_history <home>/.mysql_history
+         <home>/.sqlite_history <home>/.python_history
+         <home>/.node_repl_history 2>/dev/null`
+       - Windows: `ls -la <home>/AppData/Roaming/Microsoft/Windows/PowerShell/PSReadLine/ConsoleHost_history.txt 2>/dev/null`
+       Empty or 0-byte files are themselves signal — record as a blind spot,
+       not "clean."  An mtime within the last few seconds suggests a recent
+       history clear.
+
+    3. **Read each non-empty history file** with `cat`:
+       `cat <home>/.bash_history`, `cat <home>/.zsh_history`, etc.
+       Each is plain text (zsh's "extended" format uses `: <epoch>:<elapsed>;<cmd>`
+       lines, fish uses `- cmd:` / `  when:` records, PSReadLine is one
+       command per line UTF-8).
+
+    4. **Detect inline secrets** in each file's contents using the
+       prefix → entropy → allowlist order:
+       - **Prefix rules (high precision):** `AKIA`/`ASIA` (AWS access key),
+         `aws_secret_access_key=` (AWS secret literal), `ghp_`/`gho_`/`ghs_`/`ghu_`/`github_pat_` (GitHub),
+         `xox[baprs]-`/`xapp-` (Slack), `sk_live_`/`rk_live_`/`pk_live_` (Stripe),
+         `AIza` (Google API), `sk-ant-` (Anthropic), `sk-proj-`/`sk-` (OpenAI),
+         `glpat-` (GitLab PAT), `eyJ` followed by base64 (JWT/OIDC), `-----BEGIN`
+         (PEM private key).
+       - **Entropy fallback:** only when a context keyword
+         (`api_key|secret|token|password|auth|bearer|pwd`) appears within
+         ~40 chars of a high-entropy base64/hex blob.
+       - **Allowlist:** suppress `AKIAIOSFODNN7EXAMPLE` and its paired
+         secret, anything containing `EXAMPLE`/`PLACEHOLDER`/`<...>`/`***`,
+         test-mode keys (`_test_`, `sk_test_`), and `export X=$Y` variable
+         indirections (the literal isn't in the file).
+
+    5. **Extract the access map** from invocation patterns:
+       - **SSH/scp/rsync:** `ssh user@host`, `-i keyfile`, `-J jump,chain`.
+         Corroborate with `cat <home>/.ssh/config` (`Host`/`HostName`/`User`/
+         `IdentityFile`/`ProxyJump` blocks). Emit: hosts, jumphosts,
+         per-host identity files (which often points to a private key).
+       - **AWS:** `aws --profile <p>`, `aws sts assume-role --role-arn arn:aws:iam::ACCT:role/NAME`,
+         `aws sso login`, `--region`. Emit: profile names, role ARNs (full),
+         account IDs.
+       - **GCP:** `gcloud config set project <P>`, `gcloud config set account <A>`,
+         `--impersonate-service-account=SA@PROJ.iam.gserviceaccount.com`.
+         Emit: projects, accounts, impersonation chains.
+       - **Azure:** `az login --service-principal -u APPID --tenant TENANT`,
+         `az account set --subscription SUB`. Emit: tenants, subscriptions,
+         service principal IDs.
+       - **Kubernetes:** `kubectl config use-context CTX`,
+         `kubectl config set-context --namespace=NS`,
+         `aws eks update-kubeconfig --name CLUSTER`,
+         `gcloud container clusters get-credentials NAME`. Emit: contexts,
+         cluster names, namespaces.
+       - **Container registries:** `docker login <registry>`, ECR
+         `<acct>.dkr.ecr.<region>.amazonaws.com`, GCR/ACR/GHCR. Emit:
+         registry hosts + account IDs.
+       - **Vaults / secret stores:** `VAULT_ADDR=`, `vault kv get <path>`,
+         `vault auth`. Emit: vault addresses, secret paths.
+       - **Terraform state:** `terraform init -backend-config=...`. Emit:
+         backend type + bucket/key (S3/GCS/Azurerm).
+       - **DB clients:** `psql -h HOST -d DB -U USER`, `mysql -h HOST`,
+         `mongo CONN`, `redis-cli -h HOST`. Emit: DB host, database,
+         user. Skip raw connection strings that include passwords —
+         treat those as secrets (Step 4).
+
+    CHECKPOINT: present preliminary findings to the user — coverage
+    (which history files were present and non-empty), inline-secret count
+    (by type, no values), access-map summary (count distinct clouds /
+    accounts / clusters / vaults). Ask whether to fan out across the fleet.
+
+  fleet_strategy: |
+    Same-OS group: fan out via `puck_query_fleet` with a single
+    `ls -la <home>/.bash_history ...` enumeration command. Identify hosts
+    with non-empty history files. For each such host, queue the
+    `cat <home>/<file>` reads in a single fleet-query batch grouped by OS.
+
+    Mixed-OS fleet: split into macOS / Linux / Windows groups, send each
+    group its `<home>` and history-file paths separately.
+
+    **Cross-host correlation is the highest-value fleet output.** The same
+    fingerprint of an inline secret on two agents = a shared/reused
+    credential. The same role ARN, cluster context, or vault address across
+    many hosts = the shared access surface for that team. Report these
+    correlations explicitly — they are usually more actionable than
+    per-host findings.
+
+  iteration_criteria: |
+    **Iterate in batches.** Use `puck_run_batch` for multiple
+    (hostname, command) tuples, or emit multiple `puck_run_check` calls
+    in one response. Don't serialise.
+
+    Always explain WHY you're doing a follow-up:
+    - "Three hosts have `aws sts assume-role` invocations against the same
+      role ARN. I'm going to check whether the same engineer ran those
+      from a single laptop or whether multiple engineers share that role."
+    - "Two hosts both have a `ghp_…` token with the same 4-char prefix.
+      Let me fingerprint both and confirm reuse."
+
+    Investigate further if:
+    - An inline secret was found — pivot to `credential-exposure` skill for
+      structured handoff to per-platform `*-blast-radius` skills.
+    - A particularly broad-reach access pattern emerges (single user with
+      ≥3 cloud accounts touched, or admin-tier role-assume chains) — flag
+      for the IR engineer regardless of inline secret findings.
+    - History files appear cleared (small size + recent mtime, or evasion
+      env vars like `HISTCONTROL=ignorespace`/`HISTFILE=/dev/null` visible
+      in the file or in `cat <home>/.bashrc`) — note as a named blind spot
+      and cap confidence at 0.5 for that host.
+
+    Stop iterating when: every host's enumerated history files have been
+    read and parsed; or the inline secrets have been handed off to a
+    blast-radius skill; or max turns reached. If you hit the command cap,
+    call `puck_continue` and tell the user what remains.
+
+  analysis_template: |
+    Call `puck_save_analysis` to save the report.  Structure:
+
+    **First — TL;DR + Indicators.**  The report MUST start with the
+    `## TL;DR — analyst quick read` + `## Indicators` blocks defined in
+    the `puck://reference/analyst-tldr-template` resource.  For
+    access-history, Verdict reflects the breadth of recoverable access:
+    CLEAN (no usable identifiers in history) / NORMAL-USE (history
+    consistent with the user's role — a dev's `aws --profile prod` is
+    expected) / NOTABLE (stale or over-scoped patterns; expired
+    sessions still parseable) / CONCERNING (cross-environment access
+    in a single user's history that suggests credential reuse or
+    blast-radius beyond the host's role) / ACTIVE-COMPROMISE (recent
+    commands that don't match the user's typing pattern; histories
+    showing impossible-travel or unfamiliar tooling).  Indicators
+    .pivots should list one canonical identifier per platform reached.
+
+    After the TL;DR, the detailed record:
+
+    SEVERITY AND URGENCY — lead with this. Critical = live-looking
+    long-lived credential (`AKIA`, `ghp_` PAT, vault token with broad
+    scope); High = access-map reveals admin-tier reach (org-admin role
+    chains, root-equivalent k8s contexts) even without inline secrets;
+    Medium = stale-looking credentials or limited-scope access patterns;
+    Low = `_test_` tokens or fully-rotated fixtures.
+
+    INLINE SECRETS (per-host):
+    | Host | User | History file | Type | 4-char prefix | Source line# (redacted) |
+    Group by fingerprint to surface cross-host reuse. Never emit the full
+    secret value.
+
+    ACCESS MAP (per-user, aggregated across hosts):
+    - Clouds touched: AWS (accounts: X, Y), GCP (projects: …), Azure (tenants: …)
+    - Roles assumed: `arn:aws:iam::123:role/Admin` (count: N, last seen: …)
+    - Kubernetes contexts: `prod-eks`, `staging-gke`, …
+    - Container registries authenticated to: …
+    - Vault addresses + paths queried: …
+    - DBs connected to: …
+    - SSH targets + jumphosts: graph (start with hosts of high in/out degree)
+
+    CROSS-HOST CORRELATIONS — call these out separately. Same fingerprint
+    on multiple hosts = shared credential. Same role ARN / context on
+    multiple hosts = shared access surface.
+
+    BLIND SPOTS — be explicit. Empty/missing history files (which), evasion
+    configuration detected (`HISTCONTROL=ignorespace`, `HISTFILE=/dev/null`,
+    PSReadLine `SaveNothing`), confidence caps applied.
+
+    CONFIDENCE LEVEL — high/medium/low with explanation.
+
+inputs:
+  - name: query
+    type: string
+    description: "The investigation question (e.g., 'audit access patterns for engineer X across the fleet')"
+    required: true
+  - name: target_users
+    type: "string[]"
+    description: "Optional usernames to focus on (default: the agent's own user)"
+    required: false
+
+expected_duration: "2-8 minutes per host depending on history file sizes"
+max_turns: 7
+
+required_commands:
+  - uname
+  - whoami
+  - ls
+  - cat
+  - grep
+  # Windows-native escape hatch — OS-adaptation paragraph mentions these.
+  - "powershell -Command Get-*"
+  - findstr
+  # access-history's prose mentions `aws sts assume-role`, `aws --profile`,
+  # `aws eks update-kubeconfig`, `aws sso login` as patterns to recognise
+  # in shell history — the skill itself only reads history files, never
+  # invokes aws.  Declaring the lightest read-only aws subcommand satisfies
+  # the policy-coverage audit and leaves room for future LLM-driven
+  # validation of recognised access keys.
+  - "aws sts get-caller-identity"

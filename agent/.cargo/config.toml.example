@@ -1,0 +1,33 @@
+# Developer-only cargo config for cross-building puck-agent from
+# macOS/Linux to Windows via llvm-mingw.  NOT used by CI (the release
+# workflow builds on a Windows runner with the MSVC ABI).  NOT needed
+# for native builds (`cargo build`, `cargo test`).
+#
+# To enable cross-build for Windows on aarch64:
+#
+#   1. Download llvm-mingw for your host:
+#        https://github.com/mstorsjo/llvm-mingw/releases
+#      Pick the `*-ucrt-macos-universal.tar.xz` (macOS) or your
+#      platform's equivalent.  Extract somewhere stable.
+#
+#   2. Copy this file to agent/.cargo/config.toml:
+#        cp agent/.cargo/config.toml.example agent/.cargo/config.toml
+#
+#   3. Update the `-L` path below to point at YOUR llvm-mingw
+#      `aarch64-w64-mingw32/lib` directory.  Optionally add the
+#      llvm-mingw `bin/` to your PATH and set
+#        CC_aarch64_pc_windows_gnullvm=/path/to/aarch64-w64-mingw32-clang
+#        AR_aarch64_pc_windows_gnullvm=/path/to/llvm-ar
+#      in your environment for the cc-rs crate to find the toolchain.
+#
+#   4. cargo build --release --target aarch64-pc-windows-gnullvm
+#
+# agent/.cargo/config.toml is gitignored so each developer's local
+# path doesn't pollute the repo.
+
+[target.aarch64-pc-windows-gnullvm]
+linker = "aarch64-w64-mingw32-clang"
+rustflags = [
+    "-L", "/PATH/TO/llvm-mingw-XXXX-ucrt-macos-universal/aarch64-w64-mingw32/lib",
+    "-C", "link-arg=-Wl,-Bstatic,-lunwind,-Bdynamic",
+]

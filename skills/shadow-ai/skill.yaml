@@ -1,0 +1,199 @@
+name: shadow-ai
+version: "1.0.0"
+description: "Discover unauthorized AI tools and services running across fleet endpoints"
+category: inventory
+
+guidance:
+  objective: |
+    Build a complete inventory of unauthorized or unapproved AI tools, local
+    LLM servers, and AI provider API clients present on fleet endpoints.
+    Identify where AI API keys are stored, which hosts are running local
+    AI inference services, and what the data exfiltration risk profile is
+    for each finding.
+
+  pathfinder_strategy: |
+    **OS adaptation.** If `puck_investigate` advertises the target as a
+    Windows host, OR if `uname -s` errors or returns a MSYS/MINGW
+    string, consult the `puck://reference/os-adaptation` resource and
+    translate `ps`/`find`/`grep` to `powershell -Command Get-Process`/
+    `Get-ChildItem -Recurse`/`findstr`.  Windows-side AI tooling lives
+    under `<home>\AppData\Local\` and `<home>\AppData\Roaming\` rather
+    than the macOS `<home>/Library/Application Support/` path.  On
+    Windows substitute `<home>` = `C:\Users\<user>`.
+
+    **Batch planning (start here).**  Before issuing tool calls, list
+    every independent check you intend to run, then collapse round-trips:
+    1. For the same command across ≥2 hosts, use one `puck_query_fleet`
+       call (parallel fan-out).
+    2. For independent commands within one logical step, emit them as
+       multiple tool calls in a single response so they run concurrently.
+    Don't wait between unrelated commands.
+
+    Before running any commands, tell the user: "I'm going to check
+    [host] for unauthorized AI tools — looking at running processes,
+    environment variables, and config files."
+
+    First: detect the OS (`uname -s`) so all subsequent commands and
+    paths are platform-appropriate.
+
+    Check for the most common AI tools first (highest likelihood of
+    finding something), then expand:
+
+    1. Running processes (fastest, highest signal) — check for:
+       - Ollama (most common local LLM): process name `ollama`, port 11434
+       - LM Studio: process name `lm-studio` or `lmstudio`
+       - ChatGPT desktop app: on macOS check for `ChatGPT` process,
+         on Linux check for `chatgpt`
+       - Other local inference: llamafile, koboldcpp, localai,
+         text-generation-webui, stable-diffusion-webui
+       - Processes listening on common AI service ports (11434, 8080,
+         7860, 5000)
+    2. Environment variables (fast, confirms active usage) — check for
+       AI provider API key patterns: OPENAI_API_KEY, ANTHROPIC_API_KEY,
+       AZURE_OPENAI_KEY, GEMINI_API_KEY, HUGGINGFACE_TOKEN,
+       REPLICATE_API_TOKEN, COHERE_API_KEY, and similar.
+       NEVER extract API key values — report presence only (e.g.,
+       "OPENAI_API_KEY is set" not the key itself).
+    3. Configuration files and directories — OS-specific paths:
+       - Linux: ~/.ollama, ~/.config/ollama, ~/.lmstudio, ~/.openai,
+         ~/.anthropic, ~/.config/lm-studio
+       - macOS: ~/Library/Application Support/Ollama,
+         ~/Library/Application Support/LM Studio, ~/.ollama, ~/.openai,
+         ~/.anthropic
+       Also check for requirements.txt or pyproject.toml files
+       referencing openai, anthropic, langchain, llamaindex
+
+    CHECKPOINT: Present findings to the user before fleet sweep.
+    "Found Ollama running on host-01 (macOS), plus OpenAI API key in
+    env. Plan: sweep all hosts for processes and API keys first, then
+    deep-check any hits. Proceed?"
+
+  fleet_strategy: |
+    Prioritize by signal speed — fastest and highest-signal checks first:
+
+    1. Running processes (fastest, highest signal) — a running local AI
+       server is the strongest indicator. Check all hosts in one pass.
+    2. Environment variables (fast) — confirms active API usage. Check
+       all hosts in one pass.
+    3. Config files and installations (slower) — confirms tool is
+       installed even if not running. Only check hosts that didn't
+       hit on steps 1-2, or do a second pass if time allows.
+
+    Use OS-appropriate commands based on pathfinder findings. Do not
+    send macOS commands to Linux hosts or vice versa.
+
+    Group results by risk level, NOT by host:
+    - HIGH RISK: running local AI service OR active API keys in env
+      (data exfiltration possible right now)
+    - MEDIUM RISK: AI tools installed but not currently running
+      (could be activated at any time)
+    - LOW RISK: config files or package references only (awareness,
+      not urgent)
+    - CLEAN: no AI tool indicators found
+
+    On HIGH RISK hosts, do a deeper pass: which users, which AI
+    providers, active network connections to AI provider endpoints,
+    and what data the service has access to.
+
+  iteration_criteria: |
+    **Iterate in batches.**  When findings prompt multiple independent
+    follow-up checks, batch them: use `puck_run_batch` to dispatch
+    several (hostname, command) tuples in one call, or `puck_query_fleet`
+    for the same command across many hosts.  Issuing them as multiple
+    parallel tool calls in one response also works.  Don't serialise
+    unrelated commands one at a time.
+
+    Always explain WHY you're investigating further before running
+    more commands.
+
+    Investigate further on a host if:
+    - A local AI server process is running — this is high priority.
+      Check: which user is running it, what data directories it has
+      access to, whether it's listening on a network interface (not
+      just localhost), and what models are loaded.
+    - Multiple AI API keys are present — check which applications are
+      using them and whether there are active network connections to
+      AI provider endpoints.
+    - Active network connections to known AI provider endpoints exist
+      (api.openai.com, api.anthropic.com, etc.) — identify which
+      process is making the connection.
+
+    Stop when: all hosts have been checked for primary signals
+    (processes and env vars), or max turns reached. Do not spend
+    multiple turns on hosts with only config files and no running
+    processes or active keys. If you hit the command cap, call
+    puck_continue and tell the user what remains to be checked.
+
+  analysis_template: |
+    Call puck_save_analysis to save the report.  Structure:
+
+    **First — TL;DR + Indicators.**  The report MUST start with the
+    `## TL;DR — analyst quick read` + `## Indicators` blocks defined in
+    the `puck://reference/analyst-tldr-template` resource.  For
+    shadow-ai, Verdict reflects unauthorized-AI risk to the
+    organisation:  CLEAN (no AI tooling beyond org-approved
+    products) / NORMAL-USE (sanctioned AI products on appropriate
+    hosts — e.g. Claude Code on a developer laptop with the
+    org-issued account) / NOTABLE (third-party AI tools that the org
+    hasn't blocked but hasn't sanctioned either; or sanctioned tool
+    on the wrong host class) / CONCERNING (tools that exfiltrate code
+    or data to vendors without the org's contractual coverage;
+    personal accounts used for org work) / ACTIVE-COMPROMISE (very
+    rare in this skill — but possible if you find AI-agent tooling
+    being driven by an account that isn't the host's user, or fresh
+    sign-ins with no human at the keyboard).
+
+    After the TL;DR, the detailed record:
+
+    RISK SUMMARY — lead with the headline: how many hosts have active
+    AI tools or API keys right now?
+
+    HIGH RISK HOSTS (immediate attention):
+    - Running local AI services: host, service name, port, user,
+      whether it's network-accessible beyond localhost
+    - Active AI API keys: host, provider name only (NEVER the key
+      value), which user's environment
+
+    MEDIUM RISK HOSTS (review needed):
+    - AI tools installed but not running: host, tool name, user
+
+    LOW RISK HOSTS (awareness):
+    - Config files or package references only
+
+    OVERALL DATA EXFILTRATION RISK — are any AI services accessible
+    on the network? Are API keys present on hosts with access to
+    sensitive data?
+
+    RECOMMENDED POLICY ACTIONS for the human operator:
+    - Which services to stop immediately
+    - Which API keys to investigate (who set them, what are they for)
+    - Policy gaps to address (e.g., no endpoint monitoring for AI tools)
+    - Do NOT recommend automated remediation — list what a human
+      should review or address
+
+inputs:
+  - name: hosts
+    type: string[]
+    description: "List of hostnames or IPs to scan. If omitted, scans all reachable fleet hosts."
+    required: false
+  - name: scope
+    type: string
+    description: "Optional: restrict scan to 'local-services', 'api-keys', or 'installations'. Default scans all."
+    required: false
+    default: "all"
+
+expected_duration: "5-15 minutes depending on fleet size"
+max_turns: 10
+
+required_commands:
+  - uname
+  - whoami
+  - ls
+  - cat
+  - find
+  - grep
+  - ps
+  # Windows-native escape hatch — OS-adaptation paragraph mentions these.
+  - "powershell -Command Get-*"
+  - findstr
+

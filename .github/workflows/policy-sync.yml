@@ -1,0 +1,42 @@
+name: Policy Sync
+
+# policy/policy.toml is the single source of truth for command grammar.
+# Rust agent reads the root file directly via include_str!.  Go's go:embed
+# can only reference files within the mcp/ module, so we keep a synced
+# copy at mcp/internal/policy/policy.toml regenerated via `go generate`.
+#
+# This workflow runs `go generate` in CI and fails if it produces a diff
+# — i.e. someone edited policy/policy.toml but forgot to run go generate.
+# That's the exact failure mode that hid five weeks' worth of Windows
+# policy additions from the Go binary in production.
+
+on:
+  pull_request:
+    paths:
+      - 'policy/policy.toml'
+      - 'mcp/internal/policy/**'
+
+jobs:
+  check-sync:
+    name: policy.toml in sync (Rust ↔ Go embed)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Run go generate
+        working-directory: mcp
+        run: go generate ./internal/policy/
+
+      - name: Fail if the Go-side embed diverged from the root
+        run: |
+          if ! git diff --exit-code mcp/internal/policy/policy.toml; then
+            echo ""
+            echo "::error::mcp/internal/policy/policy.toml is out of sync with policy/policy.toml."
+            echo "::error::Run 'go generate ./mcp/internal/policy/' locally and commit the result."
+            exit 1
+          fi
+          echo "policy.toml copies are in sync"

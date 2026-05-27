@@ -1,0 +1,48 @@
+[package]
+name = "puck-agent"
+version = "0.1.0"
+edition = "2021"
+authors = ["Puck Security"]
+description = "Puck endpoint agent — read-only command executor for autonomous endpoint investigation"
+license = "MIT"
+repository = "https://github.com/puck-security/puck-oss"
+readme = "README.md"
+
+# winres compiles a Windows PE resource block (CompanyName, LegalCopyright,
+# FileDescription, etc.) into puck-agent.exe.  No-op on non-Windows targets
+# (build.rs gates via cfg(target_os = "windows")).  Always a build-dep so
+# cross-compile from Linux/macOS to Windows works without restructuring.
+[build-dependencies]
+winres = "0.1"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+thiserror = "2"
+anyhow = "1"
+serde_yaml = "0.9"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-no-provider", "blocking"] }
+toml = "0.8"
+once_cell = "1"
+libc = "0.2"
+log = "0.4"
+# default-features = false drops the `aws_lc_rs` provider feature so the
+# binary doesn't link aws-lc-sys (~3 MB of C, big Windows cross-build pain).
+# `ring` is installed as the default provider at the top of main().
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-pemfile = "2"
+rcgen = { version = "0.13", default-features = false, features = ["crypto", "pem", "ring"] }
+ring = "0.17"
+x509-parser = "0.16"
+# Used to compute POLICY_DIGEST (sha256 of the compiled-in policy.toml)
+# reported to the MCP server on every poll/SSE-connect for drift
+# detection.  Also used in tests to verify ca_cert_fingerprint.
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3"
+serde_json = "1"

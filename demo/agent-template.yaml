@@ -1,0 +1,11 @@
+# Agent config template (mTLS / Cluster B).
+#
+# Before starting the agent, run `puck-agent enroll --server https://... \
+# --hostname <h> --token-stdin <<< <bootstrap-token>` to populate the cert
+# material at the paths below.
+
+mcp_server:    "https://puck-mcp.internal:50281"
+hostname:      "REPLACE_WITH_HOSTNAME"
+tls_cert_path: "/etc/puck-agent/cert.pem"
+tls_key_path:  "/etc/puck-agent/cert-key.pem"
+tls_ca_path:   "/etc/puck-agent/ca.pem"

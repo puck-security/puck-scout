@@ -1,0 +1,220 @@
+name: blast-radius
+version: "1.0.0"
+description: "Assess blast radius of a compromised package or vulnerability"
+category: ir-triage
+
+guidance:
+  objective: |
+    Determine which hosts are affected by a specific compromised package or
+    actively exploited CVE. Assess the blast radius: how many hosts have the
+    package installed, which are running it, what network connections exist
+    from affected processes, and whether credentials may be exposed.
+
+  pathfinder_strategy: |
+    **OS adaptation.** If `puck_investigate` advertises the target as a
+    Windows host, OR if `uname -s` errors or returns a MSYS/MINGW
+    string, consult the `puck://reference/os-adaptation` resource and
+    translate the Unix commands in this skill (cat, ls, find, grep,
+    stat, ss/lsof) to native Windows equivalents
+    (`powershell -Command Get-*`, `findstr`, `netstat -ano`).  Windows
+    package detection uses `powershell -Command Get-ItemProperty` under
+    the Uninstall registry key rather than dpkg/rpm/brew.  On Windows
+    substitute `<home>` = `C:\Users\<user>`.
+
+    **Batch planning (start here).**  Before issuing tool calls, list
+    every independent check you intend to run, then collapse round-trips:
+    1. For the same command across ≥2 hosts, use one `puck_query_fleet`
+       call (parallel fan-out).
+    2. For independent commands within one logical step, emit them as
+       multiple tool calls in a single response so they run concurrently.
+    Don't wait between unrelated commands.
+
+    Before running any commands, tell the user what you're about to do:
+    "I'm going to check [host] for [package/CVE] — detecting the OS,
+    checking if the package is installed, whether it's running, and what
+    network connections affected processes have."
+
+    On ONE host, run these steps in order:
+    1. Detect OS and package manager — run `uname -s` and check which
+       package manager exists (test for dpkg, rpm, brew, apk). This
+       determines every subsequent command. Do NOT send dpkg commands
+       to macOS or brew commands to Linux.
+    2. Query the target package using the detected package manager
+       (e.g., `dpkg -l <pkg>`, `rpm -qa <pkg>`, `brew list <pkg>`)
+    3. Check if any process from the package is running (`ps aux | grep`,
+       `pgrep`, or `systemctl status`)
+    4. For running processes, check network connections (`ss -tnp` on
+       Linux, `lsof -i -n -P` on macOS) filtering to affected PIDs
+    5. Check for credential files, env vars, or tokens accessible to
+       the affected package's process user
+
+    CHECKPOINT: Present findings to the user with your fleet plan before
+    fanning out. Example: "Host-01 is Linux/apt, package is installed
+    and running with 3 outbound connections. I plan to check all 47
+    hosts for installation, then narrow to installed hosts for process
+    and network checks. Proceed?" The IR engineer may say "also check X"
+    or "skip those hosts."
+
+  fleet_strategy: |
+    Use ONLY OS-appropriate commands based on pathfinder findings. If
+    the fleet is mixed OS, group hosts by OS/package manager and send
+    the correct commands to each group.
+
+    Start with the single most targeted check: is the package installed?
+    This is the fastest way to split the fleet into affected vs. clean.
+
+    Group results by finding, not by host:
+    - AFFECTED: package installed AND running (these need immediate
+      attention)
+    - INSTALLED-ONLY: package installed but not running (lower urgency
+      but still needs patching)
+    - CLEAN: package not installed
+    - ERROR: could not determine (command failed, host unreachable)
+
+    Narrow to AFFECTED hosts for deeper checks: network connections,
+    credential exposure, config files. Do not waste commands running
+    deep checks on CLEAN hosts.
+
+  iteration_criteria: |
+    **Iterate in batches.**  When findings prompt multiple independent
+    follow-up checks, batch them: use `puck_run_batch` to dispatch
+    several (hostname, command) tuples in one call, or `puck_query_fleet`
+    for the same command across many hosts.  Issuing them as multiple
+    parallel tool calls in one response also works.  Don't serialise
+    unrelated commands one at a time.
+
+    Always explain WHY you're doing a follow-up check before running it.
+    Example: "3 hosts have the package running with outbound connections.
+    I need to check what those connections are reaching and whether any
+    credential files are accessible."
+
+    Investigate further if:
+    - A host has the package installed AND running — check network
+      connections and credential exposure
+    - A host shows network connections to unexpected destinations —
+      identify the remote IPs and ports
+    - A host has credentials or tokens accessible to the affected
+      package — HIGHLIGHT THIS IMMEDIATELY. Credential exposure is
+      critical and must not be buried in a list. Call it out with
+      severity and the specific credentials found (type, not values).
+
+    Stop iterating when: all affected hosts have been checked for
+    network and credential exposure, or max turns reached. If you hit
+    the command cap, call puck_continue and tell the user what remains
+    to be checked.
+
+  analysis_template: |
+    Call puck_save_analysis to save the report.  Structure:
+
+    **First — TL;DR + Indicators.**  The report MUST start with the
+    `## TL;DR — analyst quick read` + `## Indicators` blocks defined in
+    the `puck://reference/analyst-tldr-template` resource.  For
+    package/CVE blast-radius, Verdict maps to fleet exposure:
+    CLEAN (no vulnerable versions found) / NORMAL-USE (no exposure on
+    intended targets; some unrelated hits) / NOTABLE (vulnerable
+    package present but service not running) / CONCERNING (vulnerable
+    AND running AND reachable) / ACTIVE-COMPROMISE (evidence of
+    exploitation: anomalous process or net activity correlated with
+    the vulnerable service).  After the TL;DR, the detailed record:
+
+    SEVERITY AND URGENCY — lead with this. Is this critical (active
+    exploitation + credential exposure), high (package running, no creds
+    yet), medium (installed but not running), or low (not present)?
+
+    CONTAINMENT RECOMMENDATIONS — put these FIRST after severity. These
+    are what the IR engineer acts on at 3am:
+    - Which hosts to isolate immediately
+    - Which credentials to rotate now
+    - Which services to stop
+    - Network blocks to apply
+
+    BLAST RADIUS SUMMARY:
+    - Total hosts scanned vs. affected
+    - Hosts grouped by status: affected (installed+running), installed-
+      only, clean, error
+    - Network connections from affected processes (destinations, ports)
+    - Credential exposure: which hosts, what type of credentials, which
+      users
+
+    CONFIDENCE LEVEL — high/medium/low with explanation of what would
+    increase confidence (e.g., "medium — 4 hosts returned errors and
+    could not be assessed")
+
+  remediation_guidance: |
+    After the Blast Radius Summary, include a ## Containment Steps section.
+    Group actions by urgency tier and by host where commands differ.
+
+    ### CRITICAL — Hosts with package running AND credential exposure
+    List each host with the specific credentials found (type only, not values):
+
+    **<hostname>** — <package> running, <credential-type> exposed
+    ```bash
+    # 1. Isolate host from network (do this first)
+    # Coordinate with network team to apply ACL or VLAN quarantine
+    # If direct access: block outbound with iptables / macOS pf
+
+    # 2. Stop the affected service — use the correct service manager
+    systemctl stop <service-name>    # Linux/systemd
+    launchctl unload /Library/LaunchDaemons/<service.plist>  # macOS
+
+    # 3. Rotate exposed credentials immediately — use exact key IDs from findings
+    aws iam delete-access-key --access-key-id <key-id> --user-name <user>
+    # Create replacement before deleting if the service is still needed
+    ```
+
+    ### HIGH — Hosts with package installed and running (no confirmed cred exposure)
+    ```bash
+    # Stop the service and apply the patch
+    systemctl stop <service-name>
+    # Package update commands by OS:
+    apt-get install --only-upgrade <package>    # Debian/Ubuntu
+    yum update <package>                        # RHEL/CentOS
+    brew upgrade <package>                      # macOS
+    ```
+
+    ### MEDIUM — Hosts with package installed but not running
+    ```bash
+    # Patch without service interruption
+    apt-get install --only-upgrade <package>
+    ```
+
+    ### Network blocks (apply at perimeter while host remediation proceeds)
+    ```bash
+    # Block egress to any suspicious IPs found in network connections
+    # (list exact IPs from network connection findings)
+    ```
+
+    Use actual hostnames, service names, package names, and credential types
+    from the investigation. Do not use placeholder values in the final report.
+
+    Add a "Rotation Checklist" at the end listing every credential type
+    found exposed, the host it was on, and a checkbox for tracking:
+    - [ ] <host> — AWS key AKIA... — rotated by <date>
+    - [ ] <host> — GitHub PAT ghp_... — revoked by <date>
+
+inputs:
+  - name: query
+    type: string
+    description: "The investigation question (e.g., 'CVE-2026-XXXX in libxyz is actively exploited')"
+    required: true
+
+expected_duration: "3-10 minutes depending on fleet size"
+max_turns: 5
+
+required_commands:
+  - uname
+  - whoami
+  - ls
+  - cat
+  - ps
+  - lsof
+  - ss
+  - dpkg
+  - rpm
+  - "brew list"
+  - "aws sts get-caller-identity"
+  # Windows-native escape hatch — OS-adaptation paragraph mentions these.
+  - "powershell -Command Get-*"
+  - findstr
+  - netstat
+

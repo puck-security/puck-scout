@@ -1,0 +1,58 @@
+# Dependabot — dependency hygiene with a cooldown.
+#
+# Cooldown waits N days after a release before opening an update PR.
+# Rationale: reduces exposure to compromised-version supply-chain
+# attacks (publish-then-yank, post-publish hijacks).  Security
+# advisories ALWAYS bypass cooldown — CVE-tagged versions still PR
+# immediately, only routine updates wait.
+#
+# Deliberately NOT configured for `gomod`: Go's govulncheck does
+# call-graph reachability analysis, so we only care about CVEs in
+# code paths our binary actually exercises.  Dependabot bumps Go
+# deps regardless of reachability, generating PR noise and pressure
+# to merge un-audited updates.  govulncheck runs on every push/PR
+# (.github/workflows/security-fast.yml) and weekly via OSV-Scanner
+# (security-deep.yml).  Manual `go get -u && go test` covers
+# non-CVE bumps when there's a concrete reason.  See Filippo
+# Valsorda / Geomys on the rationale.
+#
+# Reference: https://docs.github.com/en/code-security/dependabot
+version: 2
+
+updates:
+  # GitHub Actions used in workflows.  Highest supply-chain risk
+  # surface (run with repo-scoped tokens), worth cooldown + pinning.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    cooldown:
+      default-days: 3
+      semver-major-days: 7
+      semver-minor-days: 3
+      semver-patch-days: 3
+    open-pull-requests-limit: 5
+    labels: [dependencies, ci]
+    commit-message:
+      prefix: chore(ci)
+
+  # Rust endpoint agent.
+  - package-ecosystem: cargo
+    directory: "/agent"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    cooldown:
+      default-days: 3
+      semver-major-days: 7
+      semver-minor-days: 3
+      semver-patch-days: 3
+    open-pull-requests-limit: 5
+    labels: [dependencies, rust]
+    commit-message:
+      prefix: chore(deps)

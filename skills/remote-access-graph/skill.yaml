@@ -1,0 +1,261 @@
+name: remote-access-graph
+version: "1.0.0"
+description: "Map the host's outbound + inbound remote-access trust (SSH, Tailscale, WireGuard, ZeroTier, Teleport)"
+category: ir-triage
+
+guidance:
+  objective: |
+    Reconstruct the trust graph of remote-access surfaces on a single
+    host: where this host can reach (outbound) and who could reach this
+    host (inbound). Covers SSH, mesh-fabric overlays (Tailscale,
+    WireGuard, ZeroTier, Teleport), and — via on-disk config — cloud
+    brokers (AWS SSO config, GCP gcloud config, kubeconfig).
+
+    **The graph is the deliverable. Keys are not.** This skill never
+    decrypts a key, never tests a connection, never authenticates anywhere.
+    It reads metadata (config files, `tailscale status`, `wg show`,
+    `zerotier-cli listnetworks/info/listpeers`, `tsh status`) and assembles
+    a labeled graph. Map, don't traverse.
+
+    **Why this matters in IR.** A compromised host with five SSH
+    `authorized_keys` entries from a shared bastion is a different
+    incident from one with two specific engineers' keys. A node on a
+    Tailscale tailnet with a `tag:prod` ACL has different blast radius
+    from one tagged `tag:contractor`. The reach graph informs the
+    isolate-or-observe decision (see `ir-triage` skill) and seeds the
+    list of hosts to check next.
+
+    **Identifier-vs-secret reporting (project rule).** Hostnames, user
+    accounts, key fingerprints, tag names, Teleport cluster URLs, and
+    ZeroTier network IDs are identifiers — report in full. Private-key
+    bytes are never reported. If you see a private-key path in
+    `~/.ssh/config` (`IdentityFile ~/.ssh/id_ed25519_prod`), report
+    the path; never `cat` the key file itself.
+
+    **Highest-value finding: agent-forwarding surface.** SSH agent
+    forwarding (`ForwardAgent yes` in `~/.ssh/config`, or `-A` flags
+    visible in history) lets an attacker on this host hijack the
+    operator's local agent to authenticate to anything the operator
+    can reach (MITRE T1563.001). Flag any host with `ForwardAgent yes`
+    set globally or for `Host *` as a high-severity finding regardless
+    of other content.
+
+  pathfinder_strategy: |
+    **OS adaptation.** If `puck_investigate` advertises the target as a
+    Windows host, OR if `uname -s` errors or returns a MSYS/MINGW
+    string, consult the `puck://reference/os-adaptation` resource and
+    translate `cat`/`ls`/`stat` to `powershell -Command Get-Content`/
+    `Get-ChildItem`/`Get-Item`.  OpenSSH-on-Windows config lives at
+    `<home>\.ssh\config` and `C:\ProgramData\ssh\sshd_config` (not
+    `/etc/ssh/`).  Tailscale / WireGuard binaries are
+    `C:\Program Files\Tailscale\tailscale.exe` etc.  On Windows
+    substitute `<home>` = `C:\Users\<user>`.
+
+    **Batch planning.** Most of this skill is independent reads. Emit
+    them as multiple `puck_run_check` tool calls in a single response
+    so they run concurrently.
+
+    Before running anything, tell the user: "I'm going to map [host]'s
+    remote-access trust graph: SSH inbound + outbound, mesh fabrics
+    (Tailscale, WireGuard, ZeroTier, Teleport), and on-disk cloud
+    broker configs. Read-only metadata only — no keys decrypted, no
+    connections tested."
+
+    On ONE host:
+
+    1. **OS + user detection.** `uname -s` → Darwin/Linux/Windows-Git-Bash.
+       `whoami` → derive `<home>` (`/Users/<u>` macOS, `/home/<u>` Linux,
+       `C:\Users\<u>` Windows).
+
+    2. **SSH outbound (where this host can reach).** Read in parallel:
+       - `cat <home>/.ssh/config` — Host blocks, HostName, User,
+         IdentityFile, ProxyJump, ForwardAgent. Each Host entry is a
+         node + edge in the graph.
+       - `cat <home>/.ssh/known_hosts` — list of hosts the user has
+         connected to in the past. **Note:** hashed `known_hosts` (lines
+         starting `|1|...`) are HMAC-SHA1 and opaque to bulk enumeration.
+         Report the count and that hashing is in effect as a named blind
+         spot.
+       - `ls -la <home>/.ssh/` — enumerate private-key files
+         (`id_rsa`, `id_ed25519`, `id_ecdsa`, named variants like
+         `id_ed25519_prod`). Report names and mtimes; never read contents.
+
+    3. **SSH inbound (who can reach this host).** Read in parallel:
+       - `cat <home>/.ssh/authorized_keys` — every key here authenticates
+         as this user. Extract key type, comment field (often identifies
+         the operator), and fingerprint (compute via `cat` + `ssh-keygen
+         -lf -` if `ssh-keygen` is available, otherwise just count keys
+         and report the comments).
+       - `cat /etc/ssh/sshd_config` — server-side rules. Check
+         `PermitRootLogin`, `PasswordAuthentication`,
+         `AllowAgentForwarding`, `GatewayPorts`,
+         `AuthorizedKeysFile`/`AuthorizedKeysCommand`.
+       - `ls -la /etc/ssh/ssh_host_*_key.pub` — server host keys (the
+         host's identity to inbound clients).
+
+    4. **Mesh fabrics — Tailscale.** If `tailscale` binary is in PATH:
+       - `tailscale status --json` — peers, ACL tags, exit nodes, the
+         tailnet domain. Each peer is a node; tags imply ACL reach.
+       - `tailscale version` — client version (useful for known-CVE
+         correlation).
+       If absent, skip silently; not every host runs Tailscale.
+
+    5. **Mesh fabrics — WireGuard.** If `wg` is in PATH:
+       - `wg show` — interfaces, peer public keys, allowed-IPs,
+         endpoints, last-handshake times. Each peer is a node;
+         allowed-IPs imply reachable destinations.
+
+    6. **Mesh fabrics — ZeroTier.** If `zerotier-cli` is in PATH:
+       - `zerotier-cli info` — local node ID + status.
+       - `zerotier-cli listnetworks` — joined networks, their IDs,
+         assigned IPs.
+       - `zerotier-cli listpeers` — known peer node IDs.
+
+    7. **Teleport.** If `tsh` is in PATH:
+       - `tsh status --format json` — logged-in cluster URL, roles,
+         valid-until time, request ID. Each cluster is a node; the
+         roles enumerate what this user can do there.
+
+    8. **Cloud-broker config (file reads only).** Read in parallel:
+       - `cat <home>/.aws/config` — SSO start URLs, profile names with
+         `role_arn` / `source_profile` (assume-role chains).
+       - `cat <home>/.aws/credentials` — profile names only; never
+         report the credential values (4-char prefix if mentioned).
+       - `cat <home>/.config/gcloud/configurations/config_default` and
+         `ls <home>/.config/gcloud/legacy_credentials/` — accounts and
+         projects configured.
+       - `cat <home>/.kube/config` — clusters, contexts, users.
+         `current-context` is which cluster they last used.
+
+    CHECKPOINT: present the graph summary to the IR engineer — node
+    counts per fabric, the agent-forwarding flag, key fingerprints
+    (not values), and any unusually broad reach (Host * with
+    ForwardAgent yes; authorized_keys with > 5 entries; AWS profile
+    with `source_profile` chain ≥ 2 hops). Ask whether to fan out.
+
+  fleet_strategy: |
+    Same-OS group: fan out via `puck_query_fleet` for the same
+    cat/ls/`tailscale status`/`wg show`/etc. commands.
+
+    **Highest-value fleet correlations:**
+    - Same authorized_keys public key fingerprint across many hosts =
+      a shared/golden-image key. If that key gets used by an attacker,
+      the blast radius is the whole set.
+    - Same Tailscale `tag:` on many hosts = an ACL group; if the
+      attacker authenticates to that tailnet, they can reach all of them.
+    - Same Teleport cluster URL across many hosts = shared cluster;
+      compromise of any Teleport identity affects all.
+    - Same AWS SSO start URL = shared IdP; the same SSO session can
+      enumerate every host's accessible accounts.
+
+    Group the report by correlation, not by host. "12 hosts share
+    `tag:prod` and the same Tailscale exit node" is more actionable
+    than 12 per-host reports.
+
+  iteration_criteria: |
+    **Iterate in batches.** Use `puck_run_batch` or multiple
+    `puck_run_check` calls in one response. Don't serialise.
+
+    Investigate further if:
+    - **`ForwardAgent yes`** found at the top level of `~/.ssh/config`
+      or for a wildcard `Host *` block — flag as agent-hijack surface
+      (T1563.001) and ask whether to check other hosts for the same
+      pattern.
+    - **A new authorized_keys entry** since the suspected incident time
+      — corroborate with `stat` on the file's mtime.
+    - **An SSH key with no comment field** (or a generic one like
+      `[email protected]`) — names of operators in comments are useful
+      provenance; generic comments mean either a programmatically-issued
+      key (CA-signed, see `AuthorizedKeysCommand`) or a sloppy operator.
+    - **Tailscale `--exit-node`** is set or `ExitNode` is granted in
+      ACL tags — the host can route traffic out for the whole tailnet.
+    - **A Teleport status showing a role** like `auditor` or
+      `database-admin` not matching this user's job function — pivot
+      to investigation.
+
+    Stop iterating when: every fabric on this host has been read; the
+    inbound + outbound graph is assembled; correlations identified; or
+    max turns reached. If the command cap is hit, call `puck_continue`.
+
+  analysis_template: |
+    Call `puck_save_analysis` to save the report.  Structure:
+
+    **First — TL;DR + Indicators.**  The report MUST start with the
+    `## TL;DR — analyst quick read` + `## Indicators` blocks defined in
+    the `puck://reference/analyst-tldr-template` resource.  For
+    remote-access-graph, Verdict reflects the trust-graph's blast
+    radius:  CLEAN (no remote-access surface) / NORMAL-USE (graph
+    matches expected role — ops box reaches its tier, dev reaches its
+    repos) / NOTABLE (over-permissive authorized_keys, unused but
+    valid SSH trust, stale tailnet ACL) / CONCERNING (cross-tier trust:
+    dev host has prod SSH key; assessment host has tenant-admin SSO) /
+    ACTIVE-COMPROMISE (new authorized_keys entry within the audit
+    window; unexpected mesh-peer additions; sshd_config edits with
+    weakened settings).  Indicators.pivots.other should list each
+    mesh's peer-identifier (`tailscale:tag-prod-egress`, etc.).
+
+    After the TL;DR, the detailed record:
+
+    SEVERITY AND URGENCY:
+    - Critical: agent-forwarding hijack surface present AND active
+      attacker indicators (use with `ir-triage` finding).
+    - High: agent-forwarding without confirmed attacker; or a single
+      key authorising many hosts inbound.
+    - Medium: broad inbound reach without forwarding hazard.
+    - Low: tightly-scoped trust, single-user SSH key, no mesh fabrics.
+
+    **AGENT-FORWARDING SURFACE** — if present, name it explicitly at
+    the top of the report. This is the highest-leverage privilege-escalation
+    path on a multi-user host.
+
+    OUTBOUND REACH (where this host can go):
+    - SSH targets (from ~/.ssh/config Host blocks + known_hosts)
+    - Mesh fabric peers/exit-nodes (Tailscale, WG, ZeroTier)
+    - Teleport clusters + roles
+    - Cloud accounts + projects (AWS SSO, gcloud, kubeconfig contexts)
+
+    INBOUND REACH (who can reach this host):
+    - SSH authorized_keys: count, key types, comment fields (names),
+      fingerprints
+    - sshd_config posture: PermitRootLogin, PasswordAuthentication,
+      AllowAgentForwarding, GatewayPorts
+    - Mesh-fabric inbound: which ACL tags grant access
+
+    CROSS-HOST CORRELATIONS (when run as a fleet query):
+    - Shared authorized_keys fingerprints across N hosts
+    - Shared Tailscale ACL tags
+    - Shared Teleport clusters + role overlaps
+    - Shared AWS SSO start URLs
+
+    BLIND SPOTS — be explicit:
+    - Hashed known_hosts (`|1|...` lines) opaque to enumeration
+    - Mesh fabrics not installed (skip is fine; record as "not present")
+    - Cloud broker configs not read because the file didn't exist
+    - Windows hosts have different paths and may need separate enumeration
+
+    CONFIDENCE LEVEL — high/medium/low.
+
+inputs:
+  - name: query
+    type: string
+    description: "The investigation question (e.g., 'map remote-access trust on the bastion before isolation')"
+    required: true
+
+expected_duration: "1-5 minutes per host"
+max_turns: 5
+
+required_commands:
+  - uname
+  - whoami
+  - ls
+  - cat
+  - stat
+  - "tailscale status"
+  - "tailscale version"
+  - "wg show"
+  - "zerotier-cli info"
+  - "zerotier-cli listnetworks"
+  - "zerotier-cli listpeers"
+  - "tsh status"
+  # Windows-native escape hatch — OS-adaptation paragraph mentions these.
+  - "powershell -Command Get-*"

@@ -1,0 +1,362 @@
+name: ir-triage
+version: "1.1.0"
+description: "Perform initial triage on a suspicious endpoint to assess severity and guide response"
+category: ir-triage
+
+guidance:
+  objective: |
+    Rapidly assess the current state of a suspicious endpoint to determine
+    whether a security incident is occurring, its likely severity, and what
+    immediate next steps are warranted. Triage is breadth-first: gather
+    enough signal across all major categories (processes, network, auth,
+    persistence, files) to make a severity call, not to perform deep forensics.
+
+    **Three jobs, three time budgets — don't blur them.**
+
+    | Job | Time budget | Question | Output |
+    |---|---|---|---|
+    | **Triage** | minutes 0–15 | Is this real and how bad? Is the host still talking to an attacker? | Escalate or close |
+    | **Scoping** | minutes 15–60 | What else is in play? What creds live here, what could be reached? | Containment plan + "look at these next" list |
+    | **Investigation** | hour 1+ | Exactly what happened, in what order, by whom, via what initial vector? | Timeline + root cause |
+
+    This skill is the triage job. If the answer is "escalate," recommend the
+    scoping skills (`blast-radius`, `access-history`, `credential-exposure`)
+    in the FOLLOW-ON SKILLS section of the analysis. Do not start scoping
+    work while triage is still uncertain.
+
+    **The first real decision is isolate-or-observe.** Isolate immediately
+    if the host can cause more damage from where it sits — production DB,
+    domain controller, CI/CD runner, bastion, anything holding broad cloud
+    privilege. Keep it live to observe if it's already contained (segmented
+    VLAN, dev laptop) AND live observation buys volatile evidence you'd
+    otherwise lose. Decide deliberately — pulling the cable destroys
+    RAM-resident state (live TCP sessions, in-memory tokens). Surface this
+    decision to the IR engineer in your first response; don't make it
+    silently.
+
+    **Three reasoning disciplines that separate good triage from bad:**
+
+    1. **Exposure vs abuse.** Host-disk evidence proves what could be
+       reached (the loot inventory + reachability map). It does NOT
+       prove the attacker actually used any of it. `known_hosts` lists
+       past connections; `authorized_keys` shows what would accept a
+       key. Neither proves a pivot happened. **Label items "reachable"
+       or "exposed"; promote to "compromised" ONLY when a control-plane
+       log (CloudTrail, Entra sign-in, sshd auth log on the destination
+       host) shows the credential was actually used.** Every reachability
+       edge in your report should name the evidence type that supports it.
+
+    2. **False positives are the default, not the edge case.** High-entropy
+       regex matches fire constantly on UUIDs, git SHAs, build IDs, and
+       base64 image fragments. Vendored doc keys (`AKIAIOSFODNN7EXAMPLE`,
+       Stripe `sk_test_*`), placeholders (`<DB_PASSWORD>`, `REPLACE_ME`),
+       public material misread as private (a `.pub` file or an
+       `authorized_keys` line), and rotated/aged-out keys all look "live"
+       on disk. Treat a match as a hypothesis. Down-rank fixtures and
+       placeholders; never call a credential "live" without out-of-band
+       evidence (control-plane log, or a deliberate validation step run by
+       the engineer).
+
+    3. **Absence of findings is NOT a clean host.** Memory-only credentials
+       (LSASS tokens, ssh-agent keys, in-memory OAuth), agentless hosts,
+       control-plane-only abuse (attacker exfiltrated an IMDS token and
+       called S3 from elsewhere — no host-side artifact), and anti-forensics
+       (`history -c`, `shred`, log deletion, timestomp) all produce a
+       quiet host while the incident is real. A no-findings triage ends
+       with "no host-disk evidence; recommend pulling 30-day control-plane
+       logs for every identity that touched this host," **never** with
+       "host is clean."
+
+  pathfinder_strategy: |
+    **OS adaptation.** If `puck_investigate` advertises the target as a
+    Windows host, OR if `uname -s` errors or returns a MSYS/MINGW
+    string, consult the `puck://reference/os-adaptation` resource and
+    translate the Unix commands in this skill (cat, ls, find, grep,
+    stat, head, ss/lsof, journalctl) to native Windows equivalents
+    (primarily `powershell -Command Get-*`; secondarily `findstr` /
+    `where` / `tasklist` / `netstat -ano`).  Some skill phases have no
+    Windows equivalent (crontab, launchctl, systemctl) — skip those
+    phases on Windows rather than emit garbage.  On Windows substitute
+    `<home>` = `C:\Users\<user>`.
+
+    **Batch planning (start here).**  Before issuing tool calls, list
+    every independent check you intend to run, then collapse round-trips
+    where you can:
+    1. For the same command across ≥2 hosts, use one `puck_query_fleet`
+       call (one call covers many hosts in parallel).
+    2. For independent commands within the same logical step, emit them
+       as multiple tool calls in a single response — they run
+       concurrently from your perspective and avoid serial waits.
+    Don't wait for one result before issuing the next unrelated command.
+
+    Before running any commands, tell the user what you're about to check
+    and why: "I'm going to check 5 areas on [host]: processes, network
+    connections, auth logs, scheduled tasks, and recent file changes.
+    Here's why each matters for this alert."
+
+    First command: detect the OS (`uname -s`) so all subsequent commands
+    are platform-appropriate.
+
+    **Then capture volatile state first, before disk artifacts** — order
+    of volatility per RFC 3227. RAM-resident state (live processes with
+    full command lines, parent PIDs, network connections, logged-on
+    users, ephemeral cloud tokens) vanishes on reboot or isolation, and
+    many EDR products discard older telemetry quickly. The five-area
+    sequence below is in volatility order: processes and network connections
+    first because they're the most volatile; persistence locations and file
+    artifacts last because they're stable on disk.
+
+    Check the following in order, noting after EACH area whether it looks
+    clean or suspicious before moving on:
+
+    1. Running processes — look for unknown binaries, unusual paths
+       (/tmp, /dev/shm on Linux; /private/tmp on macOS), or processes
+       with suspicious parent-child relationships. After checking, tell
+       the user: "Processes look [clean/suspicious] — [reason]."
+    2. Active network connections — look for connections to unknown
+       external IPs, unusual ports, or unexpected internal host pairs.
+       Use `ss -tnp` on Linux, `lsof -i -n -P` on macOS. After
+       checking: "Network looks [clean/suspicious] — [reason]."
+    3. Recent authentication events — check `/var/log/auth.log` or
+       `/var/log/secure` on Linux, `log show --predicate 'eventMessage
+       contains "authentication"' --last 1h` on macOS. Look for failed
+       logins, successful logins from new sources, or privilege
+       escalation. Report status.
+    4. Scheduled tasks and cron jobs — `crontab -l`, check `/etc/cron.*`,
+       and on macOS also check LaunchAgents/LaunchDaemons. Look for
+       recently added tasks, obfuscated commands, or tasks running from
+       temp directories. Report status.
+    5. Recently modified files in persistence locations — look for
+       executables, scripts, or data files in /tmp, /var/tmp, /dev/shm,
+       and common startup directories. Report status.
+
+    Adjust depth based on findings — spend MORE time where you find
+    something suspicious. If processes look clean, move quickly to
+    the next area. If you find a suspicious process, dig into its
+    file descriptor, open files, environment, and parent chain before
+    moving on.
+
+  fleet_strategy: |
+    This is single-host triage. Do NOT fan out to other hosts unless
+    the user explicitly asks for fleet scope.
+
+    If triage findings suggest lateral movement (outbound SSH connections,
+    credential theft, C2 beaconing), tell the user and recommend running
+    the blast-radius skill on the affected hosts. Do not silently
+    escalate — the IR engineer decides what to check next.
+
+  iteration_criteria: |
+    **Iterate in batches.**  When findings prompt multiple independent
+    follow-up checks (e.g., for a suspicious process: open files AND
+    parent chain AND network sockets), batch them: use `puck_run_batch`
+    to dispatch several (hostname, command) tuples in one call, or
+    `puck_query_fleet` for the same command across many hosts.  Issuing
+    them as multiple parallel tool calls in one response also works.
+    Don't serialise unrelated commands one at a time.
+
+    Dig deeper if any of the following are found, and tell the user
+    WHY you're going deeper before running more commands:
+    - A process is running from an unusual path or with an unknown name
+      → check its open files, network connections, parent process chain
+    - Active connections to external IPs not in known-good lists
+      → attempt to identify the remote service, check if other processes
+      are connecting to the same destination
+    - Authentication logs show successful login from a new or unusual
+      source → check what that session did (commands run, files accessed)
+    - A scheduled task was recently added or modified → check who added
+      it, what it runs, and whether the binary it calls is legitimate
+    - Executable files appear in /tmp or /dev/shm → check file hashes,
+      creation time, ownership, and whether any process is running them
+
+    Stop and report if: no suspicious indicators are found across all
+    five categories, or max turns reached. If you hit the command cap,
+    call puck_continue and tell the user what remains to be checked.
+
+  analysis_template: |
+    Call puck_save_analysis to save the report.  Structure:
+
+    **First — TL;DR + Indicators.**  The report MUST start with the
+    `## TL;DR — analyst quick read` + `## Indicators` blocks defined in
+    the `puck://reference/analyst-tldr-template` resource.  For
+    ir-triage, the Verdict enum maps directly to triage urgency:
+    CLEAN (host looks fine) / NORMAL-USE (busy host doing its job) /
+    NOTABLE (worth a look but not a page) / CONCERNING (real exposure
+    or misconfig) / ACTIVE-COMPROMISE (page on-call).  Don't reach for
+    ACTIVE-COMPROMISE lightly — most "weird stuff" on a dev box is
+    NORMAL-USE.  After the TL;DR, the detailed record:
+
+    VERDICT — one line at the top: escalate or close, with the single
+    most important reason. The IR engineer at 3am reads this first.
+
+    ISOLATE-OR-OBSERVE RECOMMENDATION — second. State whether the host
+    should be network-isolated now, or kept live to observe, with one
+    sentence of reasoning. If unknown, say so explicitly.
+
+    SEVERITY AND RECOMMENDED IMMEDIATE ACTION:
+    - Critical: active exploitation confirmed via control-plane or
+      live-process evidence. Recommend: [specific containment steps]
+    - High: strong indicators of compromise (live malicious process,
+      C2 connection, recent unauthorized auth). Recommend: [specific steps]
+    - Medium: suspicious but not confirmed (exposure detected, no abuse
+      evidence). Recommend: [monitoring steps]
+    - Low/Informational: nothing actionable found on host.
+
+    ACTIVE THREAT — anything still running and talking out right now,
+    with the evidence (process IDs, command lines, remote IPs, ports).
+    Empty is a valid answer; say so if nothing is live.
+
+    EXPOSURE (reach) — the reachability map and loot inventory from
+    disk evidence: which credentials are present, which trust
+    relationships exist (`authorized_keys`, `known_hosts`, AWS profiles,
+    K8s contexts). **Every edge labeled with the evidence type that
+    supports it.** Mark items "reachable" or "exposed" — NOT
+    "compromised" — unless a control-plane log confirms use.
+
+    ABUSE (control-plane confirmed) — only items where an off-host log
+    (CloudTrail, Entra sign-in, sshd auth log on the destination, GitHub
+    audit) shows the credential or session was actually used. Empty is
+    a valid answer. Note explicitly which logs you DON'T have visibility
+    into so the IR engineer knows what to pull.
+
+    FOLLOW-ON SKILLS — if severity is critical or high, recommend the
+    next skill and why:
+    - Lateral-movement indicators → run `blast-radius` to scope affected
+      hosts; consider `access-history` to reconstruct the user's reach
+    - Specific credential found → run `credential-exposure` to enumerate
+      the full credential surface
+    - Specific CVE identified → run `cve-exposure` to check fleet exposure
+    - Unauthorized AI tools found → run `shadow-ai`
+
+    FINDINGS BY CATEGORY — for each of the 5 areas: what was found,
+    clean or suspicious, with specific evidence (PIDs, paths, hashes,
+    IPs, times). Highlight actionable items prominently.
+
+    BLIND SPOTS — what was NOT checked and why:
+    - No EDR telemetry on this host (agentless or recently onboarded)
+    - No control-plane logs available to this investigation (CloudTrail,
+      IdP, audit logs sit off-host)
+    - Memory not captured (if isolation already happened or memory tooling
+      unavailable)
+    - Any host-side anti-forensics signals (cleared history, missing logs,
+      unusual mtimes on log files)
+
+    WHAT WAS CHECKED AND FOUND CLEAN — establishes scope so the IR
+    engineer knows what has been ruled out. Be explicit: "checked X, Y, Z;
+    found nothing" is more useful than silent omission.
+
+    CONFIDENCE LEVEL — high/medium/low with explanation. A no-findings
+    triage on a host with no EDR and rotated history caps at medium —
+    "no host-disk evidence; recommend control-plane log review" is the
+    correct conclusion, not "host is clean."
+
+  remediation_guidance: |
+    If severity is MEDIUM or higher, include a ## Containment Steps section
+    immediately after the SEVERITY AND RECOMMENDED IMMEDIATE ACTION heading.
+
+    **Containment sequence mantra:** disable the long-lived parent →
+    invalidate active sessions → rotate the secret → restrict the scope →
+    rebuild the host. The single most common cloud-IR containment failure
+    is rotating a key but leaving valid STS/refresh tokens alive that the
+    attacker already minted. Run the full sequence; don't stop at
+    rotation.
+
+    - **Disable parent** — for cloud-cred exposure, disable the IAM user
+      or service account first (NOT just the key). For identity
+      compromise, disable the identity at the IdP.
+    - **Invalidate active sessions** — AWS has no direct API to cancel an
+      already-issued STS token; deny by policy keyed on
+      `aws:TokenIssueTime`. Entra password resets do NOT revoke non-password
+      tokens (FIDO2, certificate); call the explicit
+      `Revoke-MgUserSignInSession` cmdlet. SSH agent-forwarded sessions
+      stay live until the agent closes; kill the agent.
+    - **Rotate the secret** — only after the parent is disabled and
+      sessions are invalidated. Otherwise the rotation just produces a
+      second valid credential alongside the attacker's existing one.
+    - **Restrict scope** — apply least-privilege before re-enabling.
+      Enforce IMDSv2 + hop-limit=1 on EC2 instances. SCPs / Conditional
+      Access / Org Policy for organisation-wide guardrails.
+    - **Rebuild the host** — re-image from a known-good golden image
+      rather than "cleaning" a confirmed-compromised host. Verify no
+      persistence (cron, systemd, autoruns, login items, kernel modules,
+      container images). Re-onboard with new credentials only after
+      eradication is verified.
+
+    Structure containment steps as numbered, copy-pasteable shell commands.
+    Order by urgency: network isolation first, then credential rotation,
+    then process termination, then persistence removal.
+
+    Example structure — adapt to actual findings:
+
+    ### Immediate (do now)
+    ```bash
+    # Network isolation — block all outbound traffic except management
+    # On Linux with iptables:
+    iptables -I OUTPUT -j DROP
+    iptables -I OUTPUT -d <management-ip>/32 -j ACCEPT
+    # On macOS: use the Firewall or disconnect from the network
+
+    # Kill confirmed malicious process (only after confirming it is malicious)
+    kill -9 <pid>
+    ```
+
+    ### Within 1 hour
+    ```bash
+    # Rotate any credentials accessible to compromised process user
+    # (see credential-exposure skill output if run — use exact key IDs)
+
+    # Remove persistence: scheduled task, cron entry, or LaunchAgent
+    crontab -r  # removes the user's entire crontab — verify contents first
+    # For a specific crontab line:
+    crontab -l | grep -v '<malicious-command>' | crontab -
+    # Remove LaunchAgent (macOS):
+    launchctl unload ~/Library/LaunchAgents/<suspicious.plist>
+    rm ~/Library/LaunchAgents/<suspicious.plist>
+    ```
+
+    ### Evidence preservation (before cleanup)
+    ```bash
+    # Capture process list and open files before killing anything
+    ps aux > /tmp/ps_snapshot.txt
+    lsof -p <pid> > /tmp/lsof_snapshot.txt  # macOS
+    # On Linux: ls -la /proc/<pid>/fd
+    ```
+
+    Always include the actual PIDs, file paths, and hostnames found during
+    triage. Do not use placeholders in the final report — every command
+    should be runnable without further substitution where possible.
+
+    If lateral movement is suspected, add a note recommending the operator
+    run the blast-radius skill before taking containment action, so the full
+    scope is known before isolating any single host.
+
+inputs:
+  - name: host
+    type: string
+    description: "Target hostname or IP address to triage"
+    required: true
+  - name: alert_context
+    type: string
+    description: "Optional: alert text, ticket ID, or context about why this host is suspicious"
+    required: false
+
+expected_duration: "2-5 minutes"
+max_turns: 8
+
+required_commands:
+  - uname
+  - whoami
+  - ls
+  - cat
+  - ps
+  - lsof
+  - ss
+  - file
+  - crontab
+  - journalctl
+  # Windows-native escape hatch — OS-adaptation paragraph mentions these.
+  - "powershell -Command Get-*"
+  - findstr
+  - netstat
+  - tasklist
+  - where
+

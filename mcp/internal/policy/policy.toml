@@ -1,0 +1,681 @@
+# policy/policy.toml — Single source of truth for Puck command-policy grammar.
+#
+# Embedded at compile time into both puck-agent (Rust) and puck-mcp (Go).
+# Edits here REQUIRE a CI parity-test pass against testdata/policy-corpus.json.
+#
+# Windows support: canonical_paths may mix Unix and Windows paths in the same
+# list — the agent's policy resolver walks them in order and the first one
+# that stat()s as a regular file wins. Use forward-slashes ("C:/Windows/...")
+# rather than back-slashes to avoid TOML escaping; Windows accepts both at
+# CreateProcess time.
+#
+# For Windows commands with no direct Unix equivalent (where, tasklist,
+# netstat, findstr) and PowerShell (powershell, pwsh), see the dedicated
+# sections at the bottom of this file.
+
+policy_version = "1.0.0"
+
+[binary.find]
+# Windows path: Git Bash / msys2 provides find.exe.  The operator
+# adds "C:/Program Files/Git/usr/bin" to PATH (or sets a per-host
+# policy_overrides re-pathing find).  Without Git Bash installed the
+# resolver hits no_executable_for_binary on Windows hosts.
+canonical_paths = [
+    "/usr/bin/find",
+    "/opt/homebrew/bin/find",
+    "C:/Program Files/Git/usr/bin/find.exe",
+]
+positional = { kind = "fs_path", min = 1, max = 8, restrict_to_prefixes = ["/", "/etc", "/var", "/Users", "/Applications", "/Library", "/private", "/opt", "/usr", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
+flags = [
+    { name = "-name",     value = "glob" },
+    { name = "-iname",    value = "glob" },
+    { name = "-path",     value = "glob" },
+    { name = "-type",     value = { kind = "enum", values = ["f","d","l","s","b","c","p"] } },
+    { name = "-mtime",    value = "duration" },
+    { name = "-atime",    value = "duration" },
+    { name = "-maxdepth", value = "uint" },
+    { name = "-mindepth", value = "uint" },
+    { name = "-print",    value = "none" },
+    { name = "-print0",   value = "none" },
+    { name = "-not",      value = "none" },
+    { name = "-or",       value = "none" },
+]
+forbidden_flags = ["-exec","-execdir","-delete","-fprint","-fprintf","-fls","-ok","-okdir"]
+
+[binary.ps]
+canonical_paths = ["/bin/ps", "/usr/bin/ps"]
+flags = [
+    { name = "-e",   value = "none" },
+    { name = "-a",   value = "none" },
+    { name = "-u",   value = "string" },
+    { name = "-x",   value = "none" },
+    { name = "-f",   value = "none" },
+    { name = "-l",   value = "none" },
+    { name = "-o",   value = "string" },
+    { name = "aux",  value = "none" },
+]
+
+[binary.aws]
+canonical_paths = [
+    "/usr/local/bin/aws",
+    "/opt/homebrew/bin/aws",
+    "C:/Program Files/Amazon/AWSCLIV2/aws.exe",
+]
+subcommand_required = true
+subcommands = [
+    "sts get-caller-identity",
+    "iam list-*",
+    "iam get-*",
+    "iam simulate-principal-policy",
+    "cloudtrail lookup-events",
+    "sso list-*",
+    "sso get-*",
+]
+flags = [
+    { name = "--region",  value = "string" },
+    { name = "--profile", value = "string" },
+    { name = "--output",  value = { kind = "enum", values = ["json","text","table"] } },
+    { name = "--query",   value = "string" },
+]
+
+[binary.cat]
+# Windows path: Git Bash bundles cat.exe.  See the [binary.find] note
+# above re: install-time PATH expectations.
+canonical_paths = ["/bin/cat", "/usr/bin/cat", "C:/Program Files/Git/usr/bin/cat.exe"]
+positional = { kind = "fs_path", min = 1, max = 16, restrict_to_prefixes = ["/etc", "/var", "/proc", "/sys", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
+flags = [
+    { name = "-n", value = "none" },
+    { name = "-v", value = "none" },
+]
+
+[binary.head]
+canonical_paths = ["/usr/bin/head", "/bin/head", "C:/Program Files/Git/usr/bin/head.exe"]
+positional = { kind = "fs_path", min = 1, max = 16, restrict_to_prefixes = ["/etc", "/var", "/proc", "/sys", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
+flags = [
+    { name = "-n", value = "uint" },
+    { name = "-c", value = "uint" },
+]
+
+[binary.tail]
+canonical_paths = ["/usr/bin/tail", "/bin/tail", "C:/Program Files/Git/usr/bin/tail.exe"]
+positional = { kind = "fs_path", min = 1, max = 16, restrict_to_prefixes = ["/etc", "/var", "/proc", "/sys", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
+flags = [
+    { name = "-n", value = "uint" },
+    { name = "-c", value = "uint" },
+]
+
+[binary.grep]
+canonical_paths = ["/usr/bin/grep", "/bin/grep", "C:/Program Files/Git/usr/bin/grep.exe"]
+positional = { kind = "fs_path", min = 1, max = 32, restrict_to_prefixes = ["/etc", "/var", "/proc", "/sys", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
+flags = [
+    { name = "-i", value = "none" },
+    { name = "-r", value = "none" },
+    { name = "-n", value = "none" },
+    { name = "-l", value = "none" },
+    { name = "-E", value = "none" },
+    { name = "-e", value = "string" },
+    { name = "-F", value = "none" },
+    { name = "--include", value = "glob" },
+    { name = "--exclude", value = "glob" },
+]
+
+[binary.ls]
+canonical_paths = ["/bin/ls", "/usr/bin/ls", "C:/Program Files/Git/usr/bin/ls.exe"]
+positional = { kind = "fs_path", min = 0, max = 16, restrict_to_prefixes = ["/", "/etc", "/var", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
+# Single-char value-less flags; the parser auto-recognises any
+# combined-short whose chars are all in this list (the standard Unix
+# `-laR` = `-l -a -R` convention).  No need to enumerate combos here.
+flags = [
+    { name = "-l", value = "none" },
+    { name = "-a", value = "none" },
+    { name = "-A", value = "none" },
+    { name = "-h", value = "none" },
+    { name = "-R", value = "none" },
+    { name = "-t", value = "none" },
+    { name = "-S", value = "none" },
+]
+
+[binary.id]
+canonical_paths = ["/usr/bin/id"]
+flags = [
+    { name = "-u", value = "none" }, { name = "-g", value = "none" },
+    { name = "-G", value = "none" }, { name = "-n", value = "none" },
+]
+
+[binary.uname]
+canonical_paths = ["/usr/bin/uname", "/bin/uname"]
+flags = [
+    { name = "-a", value = "none" }, { name = "-s", value = "none" },
+    { name = "-r", value = "none" }, { name = "-v", value = "none" },
+    { name = "-m", value = "none" }, { name = "-n", value = "none" },
+]
+
+[binary.hostname]
+canonical_paths = [
+    "/bin/hostname",
+    "/usr/bin/hostname",
+    "C:/Windows/System32/hostname.exe",
+]
+flags = []
+
+[binary.whoami]
+canonical_paths = [
+    "/usr/bin/whoami",
+    "C:/Windows/System32/whoami.exe",
+]
+flags = []
+
+[binary.stat]
+canonical_paths = ["/usr/bin/stat", "/bin/stat", "C:/Program Files/Git/usr/bin/stat.exe"]
+positional = { kind = "fs_path", min = 1, max = 16, restrict_to_prefixes = ["/", "/etc", "/var", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "/proc", "/sys", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
+flags = [
+    { name = "-f", value = "string" }, { name = "-c", value = "string" },
+    { name = "-L", value = "none"   },
+]
+
+[binary.file]
+canonical_paths = ["/usr/bin/file", "C:/Program Files/Git/usr/bin/file.exe"]
+positional = { kind = "fs_path", min = 1, max = 16, restrict_to_prefixes = ["/", "/etc", "/var", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
+flags = [ { name = "-b", value = "none" }, { name = "-i", value = "none" } ]
+
+[binary.dpkg]
+canonical_paths = ["/usr/bin/dpkg"]
+flags = [ { name = "-l", value = "none" }, { name = "-s", value = "string" }, { name = "-L", value = "string" } ]
+
+[binary.rpm]
+canonical_paths = ["/usr/bin/rpm", "/bin/rpm"]
+flags = [ { name = "-qa", value = "none" }, { name = "-qi", value = "string" }, { name = "-ql", value = "string" } ]
+
+[binary.brew]
+canonical_paths = ["/usr/local/bin/brew", "/opt/homebrew/bin/brew"]
+subcommand_required = true
+subcommands = [ "list", "list --versions", "info", "outdated", "config" ]
+flags = []
+
+[binary.last]
+canonical_paths = ["/usr/bin/last"]
+flags = [ { name = "-n", value = "uint" }, { name = "-x", value = "none" }, { name = "-F", value = "none" } ]
+
+[binary.crontab]
+canonical_paths = ["/usr/bin/crontab"]
+flags = [ { name = "-l", value = "none" }, { name = "-u", value = "string" } ]
+forbidden_flags = ["-e", "-r"]
+
+[binary.journalctl]
+canonical_paths = ["/bin/journalctl", "/usr/bin/journalctl"]
+flags = [
+    { name = "--no-pager", value = "none" },
+    { name = "-u",      value = "string" },
+    { name = "-n",      value = "uint"   },
+    { name = "--since", value = "string" },
+    { name = "--until", value = "string" },
+    { name = "-p",      value = "string" },
+    { name = "-k",      value = "none"   },
+]
+forbidden_flags = ["--vacuum-size","--vacuum-time","--vacuum-files","--rotate","--flush","--sync"]
+
+[binary.ss]
+canonical_paths = ["/usr/sbin/ss", "/sbin/ss", "/usr/bin/ss"]
+flags = [
+    { name = "-t", value = "none" }, { name = "-u", value = "none" },
+    { name = "-n", value = "none" }, { name = "-l", value = "none" },
+    { name = "-p", value = "none" }, { name = "-a", value = "none" },
+]
+
+[binary.lsof]
+canonical_paths = ["/usr/sbin/lsof", "/usr/bin/lsof"]
+flags = [
+    { name = "-i", value = "string" }, { name = "-n", value = "none" },
+    { name = "-P", value = "none"   }, { name = "-p", value = "uint"   },
+    { name = "-u", value = "string" }, { name = "-c", value = "string" },
+]
+
+[binary.dscl]
+canonical_paths = ["/usr/bin/dscl"]
+positional = { kind = "string", min = 1, max = 5 }
+flags = [ { name = "-list", value = "string" }, { name = "-read", value = "string" } ]
+
+[binary.osquery]
+canonical_paths = [
+    "/usr/local/bin/osqueryi",
+    "/opt/homebrew/bin/osqueryi",
+    "C:/Program Files/osquery/osqueryi.exe",
+]
+flags = [ { name = "--json", value = "none" }, { name = "--csv", value = "none" } ]
+positional = { kind = "string", min = 0, max = 1 }
+
+# git — local git read-only operations.  ls-files / log are used by
+# credential-exposure to enumerate tracked files and recent history
+# without touching the worktree.  --version is a one-shot presence/
+# version probe (no subcommand semantics; we model it as a degenerate
+# single-token subcommand entry so the policy parser accepts it via the
+# same path).  All state-changing verbs (add, commit, push, pull, fetch,
+# checkout, rebase, merge, reset, clean, gc, prune, remote, etc.) are
+# excluded by absence from the subcommand allowlist.
+[binary.git]
+canonical_paths = [
+    "/usr/bin/git",
+    "/usr/local/bin/git",
+    "/opt/homebrew/bin/git",
+    "C:/Program Files/Git/cmd/git.exe",
+    "C:/Program Files/Git/bin/git.exe",
+]
+subcommand_required = true
+subcommands = [
+    "--version",
+    "ls-files",
+    "log",
+    "status",
+    "config --get-all",
+    "config --get",
+    "config --list",
+    "rev-parse",
+    "show",
+    "diff",
+]
+flags = [
+    { name = "--oneline",    value = "none" },
+    { name = "--name-only",  value = "none" },
+    { name = "--stat",       value = "none" },
+    { name = "--all",        value = "none" },
+    { name = "--graph",      value = "none" },
+    { name = "-n",           value = "uint" },
+    { name = "--max-count",  value = "uint" },
+    { name = "--abbrev-commit", value = "none" },
+    { name = "--no-color",   value = "none" },
+    { name = "--no-pager",   value = "none" },
+    { name = "--pretty",     value = "string" },
+    { name = "--format",     value = "string" },
+    { name = "--cached",     value = "none" },
+    { name = "--modified",   value = "none" },
+    { name = "--others",     value = "none" },
+    { name = "--exclude-standard", value = "none" },
+    { name = "-z",           value = "none" },
+    { name = "--porcelain",  value = "none" },
+    { name = "--short",      value = "none" },
+]
+positional = { kind = "string", min = 0, max = 16 }
+
+[binary.gh]
+canonical_paths = [
+    "/usr/local/bin/gh",
+    "/opt/homebrew/bin/gh",
+    "C:/Program Files/GitHub CLI/gh.exe",
+]
+subcommand_required = true
+subcommands = [
+    "auth status", "api",
+    "repo list", "repo view",
+    "pr list", "pr view", "pr diff",
+    "issue list", "issue view",
+]
+flags = [
+    { name = "--json", value = "string" },
+    { name = "-q",     value = "string" },
+    { name = "-R",     value = "string" },
+]
+
+# tailscale — Tailscale CLI. Read-only verbs only; status reveals peer
+# identities and the mesh shape, version reveals the client version.
+# All state-changing subcommands (up, down, login, logout, set, ssh, serve,
+# funnel, cert) are excluded by being absent from the allowlist.
+[binary.tailscale]
+canonical_paths = [
+    "/usr/local/bin/tailscale",
+    "/opt/homebrew/bin/tailscale",
+    "/usr/bin/tailscale",
+    "C:/Program Files/Tailscale/tailscale.exe",
+]
+subcommand_required = true
+subcommands = ["status", "version"]
+flags = [
+    { name = "--json",    value = "none" },
+    { name = "--peers",   value = "none" },
+    { name = "--active",  value = "none" },
+]
+
+# wg — WireGuard CLI. Only the read-only show subcommand is allowed.
+# setconf/addconf/set/genkey/pubkey are state-changing or secret-generating
+# and remain excluded.
+[binary.wg]
+canonical_paths = ["/usr/bin/wg", "/opt/homebrew/bin/wg", "/usr/local/bin/wg"]
+subcommand_required = true
+subcommands = ["show"]
+
+# zerotier-cli — ZeroTier CLI. Read-only enumeration of networks, peers,
+# and local node info. join/leave/set are state-changing and excluded.
+[binary.zerotier-cli]
+canonical_paths = ["/usr/sbin/zerotier-cli", "/usr/local/bin/zerotier-cli", "/opt/homebrew/bin/zerotier-cli"]
+subcommand_required = true
+subcommands = ["listnetworks", "listpeers", "info"]
+flags = [
+    { name = "-j", value = "none" },
+]
+
+# tsh — Teleport client. Only status (who am I, which clusters/roles
+# am I logged into) is allowed. login/logout/ssh/request etc. are
+# state-changing or pivot operations and remain excluded.
+[binary.tsh]
+canonical_paths = [
+    "/usr/local/bin/tsh",
+    "/opt/homebrew/bin/tsh",
+    "/usr/bin/tsh",
+    "C:/Program Files/Teleport/tsh.exe",
+]
+subcommand_required = true
+subcommands = ["status"]
+flags = [
+    { name = "--format", value = { kind = "enum", values = ["text", "json", "yaml"] } },
+]
+
+# curl — restricted to link-local IMDS only (169.254.169.254). The
+# agent-network-isolation invariant (CLAUDE.md §2.6) says the agent must
+# not call external network services other than the configured MCP
+# server. Link-local 169.254.169.254 is treated as a host-local API
+# surface, not an external service: it never leaves the host's network
+# stack and exists specifically to expose cloud metadata to the local
+# instance. AWS, Azure, OCI, DigitalOcean, and (via alias) GCP all
+# expose IMDS at this address. The positional URL must start with
+# "http://169.254.169.254/" — any other host (HTTPS off-host, attacker
+# URL, plain IP without scheme) is rejected by prefix. Used by the
+# runtime-context skill for cloud disambiguation.
+[binary.curl]
+canonical_paths = [
+    "/usr/bin/curl",
+    "/opt/homebrew/bin/curl",
+    "/usr/local/bin/curl",
+    "C:/Windows/System32/curl.exe",
+]
+positional = { kind = "fs_path", min = 1, max = 1, restrict_to_prefixes = ["http://169.254.169.254/"] }
+flags = [
+    { name = "-s",         value = "none" },
+    { name = "--silent",   value = "none" },
+    { name = "-i",         value = "none" },
+    { name = "--include",  value = "none" },
+    { name = "-H",         value = "string" },
+    { name = "--header",   value = "string" },
+    { name = "--max-time", value = "duration" },
+    { name = "-X",         value = { kind = "enum", values = ["GET", "PUT"] } },
+    { name = "--request",  value = { kind = "enum", values = ["GET", "PUT"] } },
+]
+
+# ============================================================================
+# Windows-native binaries
+# ----------------------------------------------------------------------------
+# Native Windows equivalents of Unix utilities that Puck investigations need.
+# All are pre-installed under C:/Windows/System32 on Windows 7+ and are
+# read-only enumeration tools (no state-changing flags exist for the
+# tasklist/netstat/findstr/where shapes used here).
+# ============================================================================
+
+# Windows tools that use the "/X" flag convention (where, tasklist,
+# findstr) are modeled as positional-string-only because the policy
+# engine's flag parser treats only "-"-prefixed tokens as flags.  This
+# is acceptable safety-wise because none of these binaries have any
+# destructive verb — the killing variant of tasklist is `taskkill`, a
+# separate binary we deliberately do NOT allow; netstat (which uses
+# Unix-style "-" flags on Windows) keeps its typed flag grammar.
+#
+# `positional = { kind = "string", min = N, max = M }` accepts any
+# token sequence within bounds; pipe / semicolon / redirect characters
+# inside individual argv elements still pose no shell-injection risk
+# because Puck always uses `Command::new` with explicit args (no shell
+# interpretation).
+
+# where — locates an executable on PATH (Windows equivalent of `which`).
+[binary.where]
+canonical_paths = ["C:/Windows/System32/where.exe"]
+positional = { kind = "string", min = 1, max = 8 }
+
+# tasklist — Windows process list (equivalent of Unix `ps`).
+[binary.tasklist]
+canonical_paths = ["C:/Windows/System32/tasklist.exe"]
+positional = { kind = "string", min = 0, max = 32 }
+
+# netstat — Windows network connection enumeration (equivalent of `ss` /
+# `lsof -i`).  Uses Unix-style "-" flags on Windows, so the flag grammar
+# applies naturally.  All flags here are read-only.
+[binary.netstat]
+canonical_paths = ["C:/Windows/System32/netstat.exe"]
+# Single-char value-less flags only; the parser admits any combined
+# form (`netstat -ano`, `-an`, `-rn`, ...) via the standard Unix
+# combined-short convention as long as every char is in this list.
+# Value-taking flags (`-p tcp`) stay separate.
+flags = [
+    { name = "-a", value = "none" },
+    { name = "-b", value = "none" },
+    { name = "-e", value = "none" },
+    { name = "-f", value = "none" },
+    { name = "-n", value = "none" },
+    { name = "-o", value = "none" },
+    { name = "-p", value = "string" },
+    { name = "-q", value = "none" },
+    { name = "-r", value = "none" },
+    { name = "-s", value = "none" },
+    { name = "-t", value = "none" },
+    { name = "-x", value = "none" },
+    { name = "-y", value = "none" },
+]
+
+# findstr — Windows string search in files (closest equivalent of `grep`).
+# All flags AND search pattern AND file paths flow through `positional`.
+[binary.findstr]
+canonical_paths = ["C:/Windows/System32/findstr.exe"]
+positional = { kind = "string", min = 1, max = 32 }
+
+# reg — Windows registry read.  Only "query" is allowed; "add", "delete",
+# "import", "export", "save", "copy", "load", "unload", "restore", "compare",
+# "flags" all mutate state and are excluded by absence from the subcommand
+# allowlist.  Registry path (HKLM\..., HKCU\..., etc.) is a positional after
+# the subcommand.
+[binary.reg]
+canonical_paths = ["C:/Windows/System32/reg.exe"]
+subcommand_required = true
+subcommands = ["query"]
+positional = { kind = "string", min = 1, max = 8 }
+
+# cmdkey — Windows Credential Manager enumeration.  Only "/list" is allowed
+# (with optional ":target" suffix to filter by target name); "/add",
+# "/delete", "/generic", "/smartcard" mutate the credential vault and are
+# excluded.  The subcommand entries use the glob-suffix form so a future
+# refactor doesn't need to enumerate every legitimate target name.
+[binary.cmdkey]
+canonical_paths = ["C:/Windows/System32/cmdkey.exe"]
+subcommand_required = true
+subcommands = ["/list", "/list:*"]
+
+# wsl — Windows Subsystem for Linux.  Read-only enumeration only ("-l",
+# "--list", optionally "-v"/"--verbose" for distro details).  "wsl <distro>
+# <command>" runs an arbitrary shell inside WSL — that form has no
+# positional or subcommand grammar declared here so the parser rejects it
+# with unexpected_positional.  --import / --export / --terminate /
+# --shutdown / --set-default are state-changing and excluded by absence.
+[binary.wsl]
+canonical_paths = ["C:/Windows/System32/wsl.exe"]
+flags = [
+    { name = "-l",        value = "none" },
+    { name = "--list",    value = "none" },
+    { name = "-v",        value = "none" },
+    { name = "--verbose", value = "none" },
+    { name = "--quiet",   value = "none" },
+    { name = "--running", value = "none" },
+    { name = "--all",     value = "none" },
+]
+
+# ============================================================================
+# PowerShell — read-only Get-* cmdlets via `-Command`.
+# ----------------------------------------------------------------------------
+# The subcommand grammar accepts three forms, longest-first:
+#
+#   "-NoProfile -NonInteractive -Command Get-*"   (recommended)
+#   "-NoProfile -Command Get-*"
+#   "-Command Get-*"                              (escape hatch)
+#
+# Two safety properties are load-bearing:
+#
+#   1. Get-* glob with bareword enforcement.
+#      `Get-*` matches any cmdlet name starting with "Get-", BUT the
+#      parser's `token_matches` enforces that the matched token contains
+#      only ASCII alnum / `-` / `_`.  That blocks the classic single-
+#      token injection `-Command "Get-Process | Stop-Process"` — the
+#      pipe character is not in the allowed bareword set and the match
+#      fails.
+#
+#   2. No positional grammar.
+#      The binary entry has `flags = []` and no `positional` block, so
+#      anything after the matched cmdlet (e.g. `Get-Date ; Stop-Process`
+#      where `;` is a separate argv token) gets rejected as
+#      unexpected_positional.  That blocks the second smuggling form.
+#
+# What is NOT defended against, intentionally:
+#
+#   - When the AI uses one of the shorter forms ("-Command Get-*"), the
+#     `-NoProfile` flag is absent, so PowerShell will source $PROFILE.*
+#     on invocation.  A user-controlled $PROFILE could run arbitrary
+#     code before Get-X executes.  Operators concerned about this
+#     should disable the shorter entries via policy_overrides on
+#     hardened hosts, or ensure $PROFILE is owned by a trust-level
+#     above the puck-agent user.  We accept this trade-off because the
+#     alternative (mandatory -NoProfile -NonInteractive) means the AI
+#     bounces on every invocation it gets slightly wrong.
+#
+#   - Get-* cmdlets that take args (Get-ChildItem -Path X,
+#     Get-Content C:\file) require an explicit per-cmdlet positional
+#     grammar that doesn't exist yet.  Those will reject with
+#     unexpected_positional until added.  Bare-invocation Get-X works.
+# ============================================================================
+
+# Positional + flag grammar that applies AFTER the subcommand consumes
+# `-Command Get-*` (and any -NoProfile/-NonInteractive prefix).  This is
+# what makes `Get-Content C:/Users/X/.aws/credentials` admissible — bare
+# `Get-X` works without these, and `Get-X <path>` works with them.
+#
+# Positional kind = fs_path with restrict_to_prefixes covers Linux,
+# macOS, AND Windows roots (forward-slash and backslash variants and
+# /c/... msys form).  Single allowlist regardless of OS — the LLM picks
+# the appropriate root.  Misdirected paths (e.g. `Get-Content
+# /etc/passwd` on Windows) admit at policy but fail at runtime with a
+# clear "path not found" — no security harm, and the no-op cost is
+# acceptable.
+#
+# Flag set is curated for the common Get-* operations:
+#   -Recurse / -Force         Get-ChildItem
+#   -Filter / -Include / -Exclude   pattern-matching cmdlets
+#   -TotalCount / -Tail       Get-Content (head / tail equivalents)
+#   -Encoding                 Get-Content byte/utf16 cases
+#   -Path / -LiteralPath      cmdlets that prefer flag-form over positional
+#
+# Anything outside this set rejects as unknown_flag; the LLM iterates to
+# a simpler form.  Cmdlets that don't accept the flag (e.g. Get-Date
+# with -Recurse) get a PowerShell runtime error in the result, which is
+# also a fine failure mode.
+[binary.powershell]
+canonical_paths = ["C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"]
+subcommand_required = true
+subcommands = [
+    "-NoProfile -NonInteractive -Command Get-*",
+    "-NoProfile -Command Get-*",
+    "-Command Get-*",
+]
+positional = { kind = "fs_path", min = 0, max = 4, restrict_to_prefixes = [
+    "/", "/etc", "/var", "/Users", "/private", "/Applications",
+    "/Library", "/opt", "/usr", "/tmp", "/proc", "/sys", "/home",
+    "C:/Users", "C:/ProgramData", "C:/Windows",
+    "C:\\Users", "C:\\ProgramData", "C:\\Windows",
+    "/c/Users", "/c/ProgramData",
+] }
+flags = [
+    { name = "-Recurse",     value = "none" },
+    { name = "-Force",       value = "none" },
+    { name = "-Filter",      value = "glob" },
+    { name = "-Include",     value = "glob" },
+    { name = "-Exclude",     value = "glob" },
+    { name = "-TotalCount",  value = "uint" },
+    { name = "-Tail",        value = "uint" },
+    { name = "-Encoding",    value = { kind = "enum", values = ["ascii","utf8","utf16","unicode","oem","default","byte"] } },
+    { name = "-Path",        value = { kind = "fs_path", restrict_to_prefixes = [
+        "/", "/etc", "/var", "/Users", "/private", "/Applications",
+        "/Library", "/opt", "/usr", "/tmp", "/proc", "/sys", "/home",
+        "C:/Users", "C:/ProgramData", "C:/Windows",
+        "C:\\Users", "C:\\ProgramData", "C:\\Windows",
+        "/c/Users", "/c/ProgramData",
+    ] } },
+    { name = "-LiteralPath", value = { kind = "fs_path", restrict_to_prefixes = [
+        "/", "/etc", "/var", "/Users", "/private", "/Applications",
+        "/Library", "/opt", "/usr", "/tmp", "/proc", "/sys", "/home",
+        "C:/Users", "C:/ProgramData", "C:/Windows",
+        "C:\\Users", "C:\\ProgramData", "C:\\Windows",
+        "/c/Users", "/c/ProgramData",
+    ] } },
+]
+
+# pwsh — PowerShell 7+, cross-platform but mostly relevant on Windows.
+# Same subcommand allowlist as powershell.exe; canonical_paths cover both
+# Windows (Program Files) and Unix (/usr/local/bin via the install pkg).
+[binary.pwsh]
+canonical_paths = [
+    "C:/Program Files/PowerShell/7/pwsh.exe",
+    "/usr/local/bin/pwsh",
+    "/opt/homebrew/bin/pwsh",
+    "/usr/bin/pwsh",
+]
+subcommand_required = true
+subcommands = [
+    "-NoProfile -NonInteractive -Command Get-*",
+    "-NoProfile -Command Get-*",
+    "-Command Get-*",
+]
+positional = { kind = "fs_path", min = 0, max = 4, restrict_to_prefixes = [
+    "/", "/etc", "/var", "/Users", "/private", "/Applications",
+    "/Library", "/opt", "/usr", "/tmp", "/proc", "/sys", "/home",
+    "C:/Users", "C:/ProgramData", "C:/Windows",
+    "C:\\Users", "C:\\ProgramData", "C:\\Windows",
+    "/c/Users", "/c/ProgramData",
+] }
+flags = [
+    { name = "-Recurse",     value = "none" },
+    { name = "-Force",       value = "none" },
+    { name = "-Filter",      value = "glob" },
+    { name = "-Include",     value = "glob" },
+    { name = "-Exclude",     value = "glob" },
+    { name = "-TotalCount",  value = "uint" },
+    { name = "-Tail",        value = "uint" },
+    { name = "-Encoding",    value = { kind = "enum", values = ["ascii","utf8","utf16","unicode","oem","default","byte"] } },
+    { name = "-Path",        value = { kind = "fs_path", restrict_to_prefixes = [
+        "/", "/etc", "/var", "/Users", "/private", "/Applications",
+        "/Library", "/opt", "/usr", "/tmp", "/proc", "/sys", "/home",
+        "C:/Users", "C:/ProgramData", "C:/Windows",
+        "C:\\Users", "C:\\ProgramData", "C:\\Windows",
+        "/c/Users", "/c/ProgramData",
+    ] } },
+    { name = "-LiteralPath", value = { kind = "fs_path", restrict_to_prefixes = [
+        "/", "/etc", "/var", "/Users", "/private", "/Applications",
+        "/Library", "/opt", "/usr", "/tmp", "/proc", "/sys", "/home",
+        "C:/Users", "C:/ProgramData", "C:/Windows",
+        "C:\\Users", "C:\\ProgramData", "C:\\Windows",
+        "/c/Users", "/c/ProgramData",
+    ] } },
+]
+
+# strings — bytes-as-printable-text extraction.  Used by credential-
+# exposure Phase 14 on Electron LevelDB session vaults (.ldb / .log)
+# to surface unencrypted access tokens.  Available natively on Unix,
+# via Git Bash on Windows (Sysinternals strings.exe also works but
+# lives at a fixed path users typically install via Chocolatey).
+[binary.strings]
+canonical_paths = [
+    "/usr/bin/strings",
+    "/opt/homebrew/bin/strings",
+    "C:/Program Files/Git/usr/bin/strings.exe",
+]
+positional = { kind = "fs_path", min = 1, max = 4, restrict_to_prefixes = [
+    "/etc", "/var", "/proc", "/sys", "/Users", "/private",
+    "/Applications", "/Library", "/opt", "/usr", "/tmp", "/home",
+    "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData",
+] }
+flags = [
+    { name = "-n", value = "uint" },
+    { name = "-a", value = "none" },
+    { name = "--all", value = "none" },
+    { name = "--bytes", value = "uint" },
+]

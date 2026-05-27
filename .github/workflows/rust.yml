@@ -1,0 +1,79 @@
+name: Rust CI
+
+on:
+  pull_request:
+    paths:
+      - 'agent/**'
+      # Shared with Go (cross-language corpus parity).  A change here
+      # has to pass both this workflow and go.yml.
+      - 'policy/policy.toml'
+      - 'testdata/policy-corpus.json'
+      - '.github/workflows/rust.yml'
+
+jobs:
+  # Per-PR build + test across every OS we ship for.  Catches OS-specific
+  # regressions (PATH separator on Windows, /tmp fixtures, launchd vs
+  # systemd assumptions) before they hit a release tag.
+  check:
+    name: Rust ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            agent/target
+          key: cargo-${{ matrix.os }}-${{ hashFiles('agent/Cargo.lock') }}
+          restore-keys: cargo-${{ matrix.os }}-
+
+      - name: Build
+        run: cargo build
+
+      - name: Test
+        run: cargo test
+
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+
+  # Lint + security audit are Linux-only — they exercise tooling, not the
+  # built artifact.  cargo-audit in particular has flaky behaviour on
+  # windows-latest GitHub runners.
+  lint:
+    name: Rust lint + audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Run corpus parity test (Rust)
+        run: cargo test --test policy_corpus_test -- --include-ignored
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+
+      - name: Security audit
+        run: cargo audit

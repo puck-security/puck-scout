@@ -1,0 +1,1399 @@
+name: credential-exposure
+version: "1.4.0"
+description: "Discover credentials on developer endpoints (dotfiles, browsers, Electron apps, AI/MCP, cloud SSO, Windows DPAPI) and emit structured handoffs for downstream per-platform blast-radius skills."
+category: hunt
+
+guidance:
+  objective: |
+    Locate and characterize plaintext credentials and API secrets stored on the
+    endpoint. Report each finding as: credential type, file path, severity,
+    whether it appears to be production or development, and the **identifier
+    fields** the credential carries (so the responder can attribute and rotate
+    without needing to re-read the file).
+
+    ╔══════════════════════════════════════════════════════════════════════╗
+    ║  SECRET REDACTION — NON-NEGOTIABLE                                   ║
+    ║                                                                      ║
+    ║  NEVER reproduce a secret value in your output, reasoning, or tool   ║
+    ║  call arguments. Not even partially. This applies to:                ║
+    ║    • raw grep/cat output you quote back in your reasoning            ║
+    ║    • "for example, the key starts with sk-ant-api03-ABCD…"          ║
+    ║    • the Detailed Findings section of the report                     ║
+    ║    • anywhere else in your response                                  ║
+    ║                                                                      ║
+    ║  When a command returns a line containing a secret value:            ║
+    ║    ✓ Record: finding exists at <path>, type <prefix>, identifier     ║
+    ║              fields in full                                          ║
+    ║    ✗ Do not: quote the line, truncate the value, or show any chars   ║
+    ║              of the secret beyond the type-prefix (e.g. "sk_l",     ║
+    ║              "ghp_", "AKIA") as defined in the field table below.    ║
+    ╚══════════════════════════════════════════════════════════════════════╝
+
+    Every file you read for credentials, you MUST also stat for permissions and
+    check whether it is tracked by git. Content alone is not enough — a 600-mode
+    file with a live key is a different finding from a 644-mode one, and a
+    git-tracked .env is shared with everyone who has ever cloned the repo.
+
+    Reporting policy — identifier vs secret:
+      Credentials carry two classes of field. Identifiers (account IDs,
+      principal names, key IDs, profile names, hosts) appear in audit
+      logs and IAM policies and are not themselves access-granting.
+      Secrets (key material, session tokens, refresh tokens, passwords)
+      grant access when leaked.
+
+      IDENTIFIERS are reported in full. SECRETS are reported as their
+      type-prefix only (the static prefix that identifies the secret
+      type, NOT the first N characters of the actual value).
+
+      Per-credential-type field classification:
+
+        AWS access keys / SSO sessions:
+          identifiers — AccessKeyId (AKIA…/ASIA…), account ID, IAM user
+                        or role name, profile name, region, SSO start URL,
+                        SSO accountId / roleName, expiresAt
+          secrets     — SecretAccessKey, SessionToken, SSO accessToken,
+                        SSO refreshToken
+        GitHub:
+          identifiers — host (github.com / GHE), token-type prefix
+                        (ghp_/gho_/ghu_/ghs_/ghr_/github_pat_),
+                        username / org (when present in config)
+          secrets     — token value
+        GitLab:
+          identifiers — host, token-type prefix (glpat-)
+          secrets     — token value
+        Stripe:
+          identifiers — pk_live_/pk_test_ publishable keys (FULL — they
+                        are explicitly public per Stripe's own docs)
+          secrets     — sk_live_/sk_test_/rk_live_ values (prefix-only)
+        Slack:
+          identifiers — workspace URL or team domain
+          secrets     — xoxc-/xoxa-/xoxb-/xapp- token values
+        SSH:
+          identifiers — key filename, key type (rsa/ed25519/ecdsa/dsa),
+                        comment field (often `user@host`),
+                        public-key SHA256 fingerprint when extractable
+          secrets     — private key bytes (NEVER reported, no prefix)
+        Generic / unknown:
+          identifiers — variable name (the LHS of `KEY=VALUE`), file path
+          secrets     — value (prefix-only)
+
+      Rule of thumb: if the field would normally appear in CloudTrail / an
+      IAM policy / a git remote URL fragment / an audit log, treat it as
+      identifier. If it grants access on its own, prefix-only.
+
+    Do NOT initiate network activity to validate identifiers (e.g., do not
+    run `aws sts get-caller-identity` or any IAM lookup against discovered
+    credentials). Validation against AWS / GitHub / etc. is the operator's
+    follow-up step from their own auth context, not the agent's job. The
+    agent reads files; it does not phone home on the user's behalf without
+    explicit user opt-in. The allowlist contains some read-only API
+    primitives for future opt-in flows, but skills do not invoke them.
+
+    Severity tiers:
+      CRITICAL — passphrase-less SSH private key; live production API key
+                 (sk_live_, AKIA in a prod-named profile); database URL with
+                 password in a production .env file; any credential file
+                 returned by `git ls-files` (committed to history); any
+                 API-key-shaped value found in a shell rc *backup* file
+                 (.zshrc.bak, .bashrc.old, etc.); 1Password Emergency Kit
+                 PDF in any user-accessible location; unencrypted Bitwarden
+                 or LastPass export; JetBrains c.kdbx + pdb.pwd co-located;
+                 Azure msal_token_cache.bin on macOS or Linux (plaintext);
+                 kubeconfig client-certificate-data populated; Slack xoxc-
+                 or Discord token in Electron leveldb; any token returned
+                 by Pattern 5 in any file
+      HIGH     — passphrase-protected SSH key on disk; GitHub PAT; AWS
+                 credentials in a non-prod profile; any token embedded in a
+                 .git/config remote URL; credential file at world- or
+                 group-readable mode (anything looser than 0600 for
+                 ~/.aws/credentials, ~/.docker/config.json,
+                 ~/.streamlit/credentials.toml, ~/.mcp-auth/*, or SSH private
+                 keys); private-key file in ~/Downloads older than 30 days;
+                 KeePass `*.kdbx` (offline crackable); browser Login Data /
+                 Cookies / key4.db existence (session theft surface);
+                 Firefox logins.json with key4.db on disk
+      MEDIUM   — development or test keys (sk_test_, profile name contains
+                 "dev" or "test"); keys only in .env.local or .env.development;
+                 Bitwarden Desktop sealed data.json existence (sealed but
+                 reconnaissance-relevant)
+      E-OOS    — EXISTS but content extraction is gated by a user-facing
+                 prompt the operator cannot bypass: Touch-ID-gated keychain
+                 items, Windows Hello / WAM blobs, iCloud Keychain
+                 keychain-2.db, Safari saved passwords, sealed vault
+                 contents (1Password 8 B5.sqlite, Bitwarden Desktop
+                 data.json post-unlock state). Record path + size + mtime
+                 only; do NOT attempt extraction.
+
+    Severity escalates by one tier if the file is also git-tracked: MEDIUM
+    → HIGH, HIGH → CRITICAL. Severity also escalates by one tier if the
+    file lives in a cloud-storage local sync (Dropbox / Google Drive /
+    OneDrive / iCloud) — broader exposure surface.
+
+  pathfinder_strategy: |
+    **OS adaptation.** If `puck_investigate` advertises the target as a
+    Windows host, OR if `uname -s` errors or returns a MSYS/MINGW
+    string, consult the `puck://reference/os-adaptation` resource and
+    translate the Unix commands in this skill (cat, ls, find, grep,
+    stat, head) to native Windows equivalents (primarily
+    `powershell -Command Get-*`; secondarily `findstr`/`where`/
+    `tasklist`).  Git Bash provides the Unix forms when installed — use
+    either path.  On Windows substitute `<home>` = `C:\Users\<user>`.
+    Phase 15 below is already Windows-native; the new translation guide
+    closes the gap for Phases 2-14.
+
+    **Batch planning (start here).**  Before issuing tool calls, list
+    every independent check you intend to run, then collapse round-trips:
+    1. For the same command across ≥2 hosts, use one `puck_query_fleet`
+       call (parallel fan-out).
+    2. For independent commands within one logical step (e.g., reading
+       multiple credential files on one host), emit them as multiple
+       tool calls in a single response so they run concurrently.
+    Don't wait between unrelated commands.
+
+    Investigate from most likely to least likely. Let each result inform the
+    next command — do not run everything blindly. Stop a phase early if it
+    produces no output; move to the next.
+
+    PHASE 1 — Establish context (always run these first):
+      1. `uname -s` — detect OS.
+           "Darwin"                              = macOS
+           "Linux"                               = Linux
+           "MINGW*", "MSYS*", "CYGWIN*"          = Windows (via Git Bash /
+                                                   MSYS2 / Cygwin / WSL)
+         If `uname -s` returns an error or empty, treat as Windows-pure-CMD
+         and emit a single finding "OS unsupported: Unix-toolchain required
+         for credential-exposure skill" — most subsequent phases will fail.
+      2. `id`        — get username, uid, groups; note if running as root.
+      3. `whoami`    — confirm the username.
+      4. Derive the path placeholders from the OS and username. The agent
+         runs `Command::new` with NO shell, so neither ~ nor %APPDATA% is
+         expanded — you MUST emit fully-qualified paths.
+
+           macOS (Darwin):
+             <home>          = /Users/<username>
+
+           Linux:
+             <home>          = /home/<username>
+
+           Windows (Git Bash / MSYS2 / WSL):
+             <home>          = /c/Users/<username>          (Git Bash form)
+             <userprofile>   = C:/Users/<username>          (forward slashes)
+             <appdata>       = <userprofile>/AppData/Roaming
+             <localappdata>  = <userprofile>/AppData/Local
+             <programdata>   = C:/ProgramData
+           When a phase below uses `<home>` on Windows, treat it as
+           `<userprofile>` for purposes of dotfile discovery.
+
+      5. List other users:
+           macOS:   `ls /Users`
+           Linux:   `ls /home`
+           Windows: `ls C:/Users`
+
+    PHASE 2 — High-yield Tier 1 checks:
+      6.  `cat <home>/.aws/credentials`
+          Look for multiple profiles; any profile named "prod", "admin", or
+          "prod-admin" with an AKIA-prefixed key is CRITICAL.
+      7.  `cat <home>/.aws/config`
+          Look for role_arn entries pointing at production accounts.
+      8.  Read AWS credential cache files (the structural-handoff
+          source for aws-blast-radius):
+          `ls -la <home>/.aws/cli/cache/ 2>/dev/null`
+          `ls -la <home>/.aws/sso/cache/ 2>/dev/null`
+
+          For each file in either dir: `cat <path>`. Extract these
+          IDENTIFIER-CLASS fields and surface them in full (they are
+          how aws-blast-radius attributes the principal — without them
+          the downstream skill cannot run):
+            - expiresAt          (ISO 8601 timestamp)
+            - accountId          (or `registrationKey` on registration entries)
+            - roleName           (absent on registration entries — see 8b)
+            - startUrl
+            - region
+            - AccessKeyId        (ASIA prefix; full value safe per reporting policy)
+
+          Do NOT surface the value of:
+            - SecretAccessKey    (4-char prefix only)
+            - SessionToken       (4-char prefix only)
+            - accessToken        (4-char prefix only)
+            - refreshToken       (4-char prefix only)
+
+      8a. Distinguish cache entry kinds:
+            - Session entry: has `accessToken` and `roleName`. This is
+              the actionable credential — grants API access AS the
+              role until `expiresAt`. Forward to the Handoff section.
+            - Registration entry: has `clientId` + `clientSecret` and
+              `registrationExpiresAt`, no `roleName`. Binds the
+              device to the SSO portal; on its own grants nothing,
+              but exfil enables impersonation on next OAuth flow.
+              Flag at MEDIUM; do NOT include in the
+              `sso_cache_paths` handoff to aws-blast-radius (that
+              skill is principal-focused, registration entries
+              aren't principal-bearing).
+
+      8b. Apply wolf-aware severity for SSO/STS cache findings
+          (engineers routinely have valid SSO sessions; the file
+          existing in its default location with default permissions
+          is not by itself an emergency):
+
+            File location = default (`~/.aws/sso/cache/`,
+            `~/.aws/cli/cache/`) AND permissions ≤ 0600 AND
+            session state ACTIVE
+              → MEDIUM. Recorded; hand off to aws-blast-radius for
+                blast assessment. Do NOT page on this alone.
+
+            Default location AND default permissions AND session
+            state EXPIRED
+              → INFO. STS session tokens and SSO accessTokens expire
+                on a server-enforced TTL and are already invalid —
+                there is nothing to rotate. Record for hygiene (stale
+                files accumulate); remediation is deletion only.
+                Do NOT recommend rotation; do NOT include in the
+                aws-blast-radius handoff (there is no live principal
+                to characterize).
+
+            File NOT in default location (e.g., `/tmp`, `~/Downloads`,
+            another user's home, anywhere under `/Volumes`)
+              → HIGH. Unexpected placement suggests exfiltration or
+                mishandling. Hand off immediately.
+
+            File at world-/group-readable permissions (looser than
+            0600) regardless of session state
+              → HIGH. Permission failure; the credential is reachable
+                by other local users.
+
+            Cache file returned by `git ls-files` (committed)
+              → CRITICAL. Committed cache is catastrophic.
+
+          The severity calculation above is for the FILE finding.
+          The PRINCIPAL severity (what the role can actually do,
+          whether session is admin-class, etc.) is computed by
+          aws-blast-radius in its next-pass; do not duplicate that
+          analysis here. credential-exposure stops at "this file
+          exists with these identifier-class fields"; aws-blast-radius
+          answers "what would happen if it were used."
+      9.  `ls -la <home>/.ssh/`
+          Every file without a .pub extension (and not named "config",
+          "known_hosts", "authorized_keys", or "environment") is a private
+          key candidate.
+      10. SSH passphrase check — MANDATORY, do NOT skip:
+          For EVERY private-key candidate from step 9, run:
+            `head -3 <home>/.ssh/<keyfile>`
+          On line 2:
+            - "ENCRYPTED" present       → passphrase-protected → HIGH
+            - "ENCRYPTED" absent        → passphrase-less      → CRITICAL
+          The analysis report MUST include a per-key passphrase status row
+          for every private key found. Omitting any key is a defect.
+      11. `cat <home>/.netrc`
+          Look for `machine github.com password <token>` entries.
+      12. `cat <home>/.git-credentials`
+          Look for `https://user:TOKEN@github.com` lines.
+      13. `cat <home>/.config/gh/hosts.yml`
+          GitHub CLI token storage.
+      14. Other under-named credential stores (single-shot, must run all):
+          `ls -la <home>/.mcp-auth/ 2>/dev/null`
+          `ls -la <home>/.config/gcloud/ 2>/dev/null`
+          `ls -la <home>/.boto 2>/dev/null`
+          `ls -la <home>/.pgpass 2>/dev/null`
+          `ls -la <home>/.my.cnf 2>/dev/null`
+          For each file found, `cat <path>` and run the permissions audit
+          (Phase 2.5).
+
+    PHASE 2.5 — File-permissions audit (REQUIRED, runs after every file you read):
+      For every credential-bearing file you have inspected so far, run:
+        macOS (Darwin): `stat -f '%Sp %u %g %N' <path>`
+        Linux:          `stat -c '%a %u %g %n' <path>`
+
+      Flag the following at HIGH:
+        - ~/.aws/credentials, ~/.aws/config not at 0600
+        - ~/.docker/config.json not at 0600
+        - ~/.streamlit/credentials.toml not at 0600
+        - ~/.mcp-auth/* not at 0600
+        - ~/.ssh/id_* private keys not at 0600
+        - ~/.netrc not at 0600
+        - ~/.pgpass not at 0600
+      Escalate to CRITICAL if a shell rc file (~/.zshrc, ~/.bashrc,
+      ~/.profile) is at any mode AND contains a recognizable API-key-shaped
+      value (any of the patterns from Phase 4).
+
+      Do not assume permissions are correct based on filename. Always stat.
+
+    PHASE 3 — .env file discovery (multi-root, deeper):
+      A single shallow find from $HOME misses .env files in deep project
+      trees. Walk multiple roots at depth 6. Skip a root if its `ls`
+      returns nothing.
+
+      Roots to try (in order; only those that exist):
+        <home>
+        <home>/Documents
+        <home>/Downloads
+        <home>/Desktop
+        <home>/projects
+        <home>/code
+        <home>/src
+        <home>/work
+        /opt
+        /srv
+
+      For each existing root, run two finds:
+        15. `find <root> -maxdepth 6 -name ".env" -type f`
+        16. `find <root> -maxdepth 6 -name ".env.*" -type f`
+        (`<home>` is one of the roots; do not skip it. The deeper depth is
+        intentional — real misses have sat at <home>/Documents/<org>/<repo>/
+        deploy/hosted/.env which is 5 levels down.)
+
+      For each .env path found:
+        17. `cat <path>` and grep for: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+            STRIPE_SECRET_KEY, DATABASE_URL containing a password,
+            SLACK_BOT_TOKEN, OPENAI_API_KEY, ANTHROPIC_API_KEY, GITHUB_TOKEN,
+            plus the broader patterns in step 22 below.
+        18. Run the Phase 2.5 permissions audit on <path>.
+        19. Check whether the file is git-tracked:
+              `git -C <repo_root> ls-files --error-unmatch <relative_path>`
+            where <repo_root> is the nearest ancestor directory of <path>
+            containing a .git/ directory. If exit code is 0, the file is
+            tracked — escalate severity by one tier (medium→high, high→
+            critical) and tag the finding "git-tracked".
+
+      Files named .env.production or .env.prod → severity is CRITICAL
+      regardless of key type.
+
+    PHASE 3.5 — Shell rc files and backups:
+      Live rc files are usually not the gap. *Backup* rc files (.bak, .old,
+      .orig, .swp, ~, date-suffixed copies) are routinely left behind and
+      almost never cleaned up after credential rotation.
+
+      20. List every rc-shaped file, including backups:
+            `ls -la <home>/.zshrc* <home>/.bashrc* <home>/.profile* \
+                    <home>/.zprofile* <home>/.bash_profile* \
+                    <home>/.zlogin* <home>/.bash_login* 2>/dev/null`
+      21. For each result whose suffix is .bak, .old, .orig, .swp, ~, or a
+          date-ish string, treat as a backup. Run:
+            `cat <path>` and grep for the same broad pattern set used in
+            Phase 4 / step 22.
+          Any credential found in a backup rc file is HIGH at minimum
+          (CRITICAL if the prefix is a live key like sk_live_ or AKIA).
+
+    PHASE 4 — Shell history (broad pattern set):
+      22. Grep with a UNION of patterns covering known prefixes AND the
+          positional-CLI-arg form that ad-hoc secret managers leave behind
+          (the latter caught real findings the targeted-prefix-only form
+          missed).
+
+          For each of <home>/.bash_history and <home>/.zsh_history, run:
+            `grep -iE "AWS_SECRET|AWS_ACCESS_KEY|AKIA[A-Z0-9]{16}" <history>`
+            `grep -iE "sk_live_|sk_test_|pk_live_|pk_test_|rk_live_" <history>`
+            `grep -iE "ghp_|github_pat_|gho_|ghs_|ghr_" <history>`
+            `grep -iE "xox[baprs]-[A-Za-z0-9-]{10,}" <history>`
+            `grep -iE "sk-ant-[A-Za-z0-9_-]{20,}" <history>`
+            `grep -iE "AIza[0-9A-Za-z_-]{35}" <history>`
+            `grep -iE "eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\." <history>`
+            `grep -iE "npm_[A-Za-z0-9]{36}" <history>`
+            `grep -iE "puck-bt-[A-Za-z0-9_-]{20,}" <history>`
+            `grep -iE "(token|api[_.-]?key|password|secret)" <history>`
+
+          Note on `puck-bt-…` matches: those are Puck's own bootstrap
+          tokens for agent enrollment.  They are single-use and
+          time-limited (default 4h TTL), so a hit in history is
+          usually a spent token — still report it (the install path
+          should not leak the token via history), but classify as
+          MED, not HIGH, unless the token's `puck-mcp doctor`-visible
+          ledger entry shows it's still unspent.
+          (The last is broad on purpose — it catches positional-arg form like
+          `secret-add OPENAI_KEY "sk-..."` that prefix-only patterns miss.
+          Filter false positives in analysis, not at grep time.)
+          Note: macOS has used zsh as the default shell since Catalina
+          (10.15), so .zsh_history is higher priority on Darwin.
+
+    PHASE 5 — Cloud and tool credential files:
+      23. `cat <home>/.config/gcloud/credentials.db 2>/dev/null` (binary;
+          run `file` first if available, otherwise just note its existence
+          and permissions — do not flood output with binary).
+      24. `cat <home>/.config/gcloud/access_tokens.db 2>/dev/null` (same
+          treatment as above).
+      25. `cat <home>/.config/gcloud/application_default_credentials.json`
+      26. `cat <home>/.boto`
+      27. `cat <home>/.kube/config`
+          Look for "token:" entries and embedded certificates.
+      28. `cat <home>/.docker/config.json`
+          Look for "auth" or "identitytoken" keys.
+      29. `cat <home>/.npmrc`
+          Look for `_authToken` lines.
+      30. `cat <home>/.terraform.d/credentials.tfrc.json`
+      31. Run the Phase 2.5 permissions audit on every file inspected here.
+
+    PHASE 5.5 — ~/Downloads private-key sweep:
+      Private keys (.pem, .key, ssh-key files, PKCS#12) routinely land in
+      ~/Downloads and stay there for months. They are world-readable by
+      default on macOS and live in an untrusted location.
+
+      32. `find <home>/Downloads -maxdepth 3 -type f \( \
+            -name "*.pem" -o -name "*.key" -o -name "id_rsa*" \
+            -o -name "id_ed25519*" -o -name "*.p12" -o -name "*.pfx" \
+            -o -name "*.jks" \) 2>/dev/null`
+      33. For each match, `head -1 <path>`. A line containing
+          "-----BEGIN" plus "PRIVATE KEY" indicates a real private key.
+          Severity:
+            - HIGH baseline (any private key in ~/Downloads).
+            - CRITICAL if the file mtime is older than 30 days (long-lived
+              key in an untrusted location). Use `stat` to read mtime.
+      34. Run the Phase 2.5 permissions audit on every match.
+
+    PHASE 6 — Git-embedded tokens (commonly missed by other tools):
+      35. `find <home> -maxdepth 6 -name "config" -path "*/.git/config"`
+          For each result: `cat <path>`
+          Look for remote URLs containing "@" — these embed a token:
+            https://user:TOKEN@github.com/...
+            https://TOKEN@github.com/...
+          These are HIGH severity — often stale, forgotten, and still valid.
+
+    PHASE 6.5 — Tracked secrets (git ls-files):
+      For every .git/config found in step 35, the containing repo root is
+      `dirname(dirname(<config_path>))`. For each such <repo_root>:
+
+      36. `git -C <repo_root> ls-files | grep -E '(^|/)(\.env(\..+)?|credentials|secrets|.*\.pem|.*\.key|service-account.*\.json|.*\.kube/config)$'`
+          Any line returned is a CRITICAL finding — the file is committed
+          to history and exists in every clone of the repo, including build
+          caches and forks.
+      37. For each tracked secret file, get a remediation pointer:
+          `git -C <repo_root> log --oneline -n 1 -- <relative_path>`
+          The returned commit hash is the starting point a remediator will
+          need for `git filter-repo` or BFG.
+
+      Note: this phase requires `git` to be in the MCP allowlist with
+      `ls-files` and `log` as allowed subcommands and the matcher's
+      `-C <path>` extension enabled. The skill assumes both are present.
+
+    PHASE 7 — macOS Keychain (Darwin only):
+      If OS is macOS, check for credential stores beyond the filesystem.
+      38. `security list-keychains` — paths + count. Non-default keychains
+          (beyond System.keychain and login.keychain-db) indicate additional
+          credential stores worth noting; aws-vault.keychain-db is a
+          particularly high-signal hit (real long-lived IAM creds nearby).
+      39. `security dump-keychain login.keychain-db` (metadata only — the
+          command WITHOUT `-d` does not return secret values, only item
+          attributes: account, service, label, dates).
+          Pipe through `head -200` if output is large.
+          Look for these high-value service names in the metadata:
+            - `cursor-access-token`
+            - `Claude Code-credentials`
+            - `Zed Account Credentials`
+            - `Chrome Safe Storage`, `Brave Safe Storage`, etc.
+            - `aws-vault`
+            - `<app> Safe Storage` for any Electron app (Slack, Discord,
+              Signal, etc. — confirms safeStorage adoption)
+      40. NEVER run `security find-generic-password`,
+          `security find-internet-password`, `security find-key`, or
+          `security find-certificate` — these prompt the user for keychain
+          access and are out of scope for read-only investigation. The
+          allowlist rejects them.
+
+    PHASE 8 — Additional users (if root or multiple users found):
+      Repeat a targeted subset of Phases 2–3 for each additional user.
+      Limit to high-probability paths; do not re-run Phases 6–7 for every user.
+
+    PHASE 9 — AI tool & MCP server credentials (NEW in v1.2.0):
+      AI coding assistants and MCP server configs are a fast-growing
+      credential category. Most store bearer tokens in plaintext config
+      files; some use OS keychains (which we enumerate via metadata only
+      in Phase 7).
+
+      41. Anthropic Claude Code:
+            `cat <home>/.claude/.credentials.json 2>/dev/null`     # Linux/WSL only
+            `cat <home>/.claude/settings.json 2>/dev/null`
+            `cat <home>/.claude/settings.local.json 2>/dev/null`
+            macOS: file is absent — token lives in Keychain item
+              "Claude Code-credentials" (enumerated metadata-only in
+              Phase 7 step 39).
+            Windows: `cat <appdata>/Claude/claude_desktop_config.json`
+              and look for bearer tokens in `mcpServers.*.env` blocks.
+      42. Cursor:
+            `cat <home>/.cursor/mcp.json 2>/dev/null`
+            `cat <home>/.cursor/settings.json 2>/dev/null`
+            macOS Keychain item: `cursor-access-token` (Phase 7 metadata).
+            Windows: `<appdata>/Cursor/`.
+      43. Codeium / Windsurf:
+            `cat <home>/.codeium/windsurf/mcp_config.json 2>/dev/null`
+            `cat <home>/.codeium/windsurf/state.json 2>/dev/null`
+      44. GitHub Copilot (used by VS Code, Neovim, Vim, JetBrains):
+            `cat <home>/.config/github-copilot/hosts.json 2>/dev/null`
+            `cat <home>/.config/github-copilot/apps.json 2>/dev/null`
+          Look for `oauth_token` field, `ghu_` prefix.
+          Windows: `<appdata>/GitHub Copilot/` paths.
+      45. OpenAI / Codex CLI:
+            `cat <home>/.openai/auth.json 2>/dev/null`
+            `cat <home>/.config/openai/auth.json 2>/dev/null`
+      46. Zed:
+            `ls -la <home>/.config/zed/ 2>/dev/null`
+            macOS Keychain item: `Zed Account Credentials`.
+      47. Gemini CLI variants:
+            `cat <home>/.config/google-generativeai/* 2>/dev/null`
+            `cat <home>/.config/gemini/* 2>/dev/null`
+      48. MCP server configs (env-block bearer tokens are common):
+            `cat <home>/.mcp.json 2>/dev/null`
+            `find <home> -maxdepth 4 -name ".mcp.json" -type f 2>/dev/null`
+            `cat <home>/Library/Application Support/Claude/claude_desktop_config.json 2>/dev/null`  # macOS
+            For each, grep for `"env"` blocks and emit token-pattern hits
+            using the regex panel from Phase 4 step 22.
+
+      Run the Phase 2.5 permissions audit on every file inspected here.
+      Severity: CRITICAL when a `oauth_token`, `ghu_`, `sk-ant-`, `sk-proj-`,
+      or `Bearer ` value appears in plaintext; HIGH otherwise (existence in
+      a known location).
+
+    PHASE 10 — Password-manager artifacts (NEW in v1.2.0):
+      Closes the 1Password / Bitwarden / LastPass / KeePass / JetBrains gap.
+
+      49. 1Password Emergency Kit PDFs (CRITICAL — Secret Key + Sign-in URL
+          is half the auth factors). Search Downloads, Desktop, Documents,
+          and the cloud-storage roots from Phase 13:
+            macOS — REQUIRED single command (do NOT walk with find on macOS;
+              the recursive walk burns command budget and produces the
+              same result orders of magnitude slower):
+              `mdfind "kMDItemFSName == '1Password Emergency Kit*.pdf' \
+                       || kMDItemTextContent == 'sign in to your 1Password \
+                       account in an emergency'"`
+            Linux / Windows / macOS-only-if-mdfind-missing:
+              `find <home>/Downloads <home>/Desktop <home>/Documents \
+                    -maxdepth 3 -type f -iname "*1password*emergency*kit*.pdf" \
+                    2>/dev/null`
+          For each match: `head -1 <path>` to confirm it's a PDF; flag
+          CRITICAL.
+      50. Bitwarden / LastPass plaintext exports:
+            `find <home>/Downloads <home>/Desktop <home>/Documents \
+                  -maxdepth 3 -type f \
+                  \( -iname "bitwarden_export*.json" \
+                  -o -iname "bitwarden_export*.csv" \
+                  -o -iname "lastpass*export*.csv" \) 2>/dev/null`
+          For each `.json`: grep for `"encrypted":\s*false` to confirm
+          plaintext. Severity CRITICAL when unencrypted; HIGH when
+          encrypted (offline-brute-forceable).
+      51. KeePass `.kdbx` and adjacent key files:
+            `find <home>/Documents <home>/Desktop <home>/Downloads \
+                  -maxdepth 4 -type f \
+                  \( -name "*.kdbx" -o -name "*.kdb" \) 2>/dev/null`
+          For each `.kdbx`, also check the same directory for `*.key` or
+          `*.keyx` files — co-location collapses security to whichever
+          component is weakest. Flag HIGH baseline; CRITICAL when paired.
+      52. JetBrains `c.kdbx` + `pdb.pwd` (recoverable via the published
+          JetDecrypt construction when both files coexist):
+            `find <home>/.config/JetBrains -maxdepth 3 -name "c.kdbx" 2>/dev/null`
+            `find <home>/.config/JetBrains -maxdepth 3 -name "pdb.pwd" 2>/dev/null`
+            Windows: `find <appdata>/JetBrains -maxdepth 3 -name "c.kdbx"`
+                     `find <appdata>/JetBrains -maxdepth 3 -name "pdb.pwd"`
+          When both present in the same dir → CRITICAL (offline recoverable).
+      53. Bitwarden Desktop cache (existence-only, content sealed by
+          master-key-derived key):
+            `ls -la <home>/Library/Application Support/Bitwarden/data.json 2>/dev/null` (macOS)
+            `ls -la <appdata>/Bitwarden/data.json 2>/dev/null` (Windows)
+            `ls -la <home>/.config/Bitwarden/data.json 2>/dev/null` (Linux)
+      54. KeePassXC LastDatabases pivot hint:
+            `cat <home>/.config/keepassxc/keepassxc.ini 2>/dev/null | \
+                grep -i "LastDatabases\|RememberLastDatabases"`
+
+    PHASE 11 — Browser-store existence (NEW in v1.2.0):
+      Existence-only across Chromium-family + Firefox. **Do NOT decrypt.**
+      Decryption requires Keychain access (macOS — would prompt) or DPAPI/
+      ABE bypass (Windows — out of scope for read-only investigation).
+      The skill records existence + size + mtime + ABE-key presence; flags
+      the surface but never extracts values.
+
+      55. Chromium-family browsers. For each of:
+            macOS: `<home>/Library/Application Support/{Google/Chrome,
+                                                        Microsoft Edge,
+                                                        BraveSoftware/Brave-Browser,
+                                                        Vivaldi,
+                                                        com.operasoftware.Opera,
+                                                        Yandex/YandexBrowser,
+                                                        Arc}`
+            Linux: `<home>/.config/{google-chrome,microsoft-edge,
+                                    BraveSoftware/Brave-Browser,
+                                    vivaldi,opera,yandex-browser}`
+            Windows: `<localappdata>/{Google/Chrome,Microsoft/Edge,
+                                       BraveSoftware/Brave-Browser,
+                                       Vivaldi,Opera Software/Opera Stable,
+                                       Yandex/YandexBrowser}/User Data`
+          List its profile directories (Default, "Profile 1", etc.) and
+          for each profile run:
+            `ls -la <profile>/{Login\ Data,Cookies,Web\ Data,History} 2>/dev/null`
+            `cat <profile>/../Local\ State 2>/dev/null | head -200`
+          On the `Local State` JSON, grep for `"app_bound_encrypted_key"` —
+          presence = Chrome 127+ ABE is in effect. Note in findings.
+          DO NOT cat the SQLite databases (binary; emits noise).
+          Severity: HIGH for existence (session theft is the dominant 2024–
+          2026 risk per the report); record sizes + mtime so a remediator
+          can assess freshness.
+      56. Firefox profiles. With NO master/primary password (Firefox
+          default), `logins.json` is decryptable purely from `key4.db` via
+          NSS — silently:
+            `find <home>/.mozilla/firefox <home>/Library/Application\ Support/Firefox/Profiles \
+                  <appdata>/Mozilla/Firefox/Profiles -maxdepth 3 \
+                  \( -name "logins.json" -o -name "key4.db" \
+                  -o -name "signons.sqlite" \) 2>/dev/null`
+          For each `logins.json` found:
+            `head -1 <path>` to record size of the JSON.
+            `wc -l <path>` (if available) for entry count.
+          Do NOT attempt decryption. Severity: HIGH when both
+          `logins.json` and `key4.db` exist and `logins.json` is non-empty
+          (cracking is purely offline against `key4.db`); CRITICAL when
+          `key4.db` permissions are user-readable AND no master password
+          is configured (the report notes this is the Firefox default).
+
+    PHASE 12 — Cloud SSO depth (NEW; expands existing Phase 5):
+      57. Azure CLI MSAL token cache. **Microsoft documents this as
+          plaintext JSON on macOS and Linux** (DPAPI on Windows):
+            `cat <home>/.azure/msal_token_cache.bin 2>/dev/null | head -50`
+            `cat <home>/.azure/azureProfile.json 2>/dev/null`
+            `cat <home>/.azure/accessTokens.json 2>/dev/null`  # legacy pre-2.30.0
+          Run Phase 2.5 permissions audit. CRITICAL on macOS/Linux when
+          msal_token_cache.bin is present and readable.
+      58. Azure PowerShell:
+            `cat <home>/.Azure/AzureRmContext.json 2>/dev/null`
+            `ls -la <home>/.Azure/TokenCache.dat 2>/dev/null`
+      59. kubeconfig with inline X.509:
+            `grep -E "client-(certificate|key)-data:" <home>/.kube/config 2>/dev/null`
+          Any non-empty match → CRITICAL (1–10 year validity, functionally
+          permanent until cluster CA rotation).
+      60. Kubernetes exec-credential plugin caches:
+            `ls -la <home>/.kube/cache/aws-iam-authenticator/ 2>/dev/null`
+            `ls -la <home>/.kube/cache/gke-gcloud-auth-plugin/ 2>/dev/null`
+          For populated dirs, `cat` the credential cache JSON files.
+      61. aws-vault recon (existence is the signal — DO NOT read keychain
+          backend, would prompt):
+            `ls -la <home>/.awsvault/ 2>/dev/null`           # file backend
+            `ls -la <home>/Library/Keychains/aws-vault.keychain-db 2>/dev/null`  # macOS keychain backend
+            `ls -la <appdata>/aws-vault/ 2>/dev/null`        # Windows credential manager backend hint
+
+    PHASE 13 — Cloud-storage roots + filename-pattern sweep (NEW; Section K
+                Pattern 3 + Pattern 7):
+      Cloud storage local syncs are a routinely-missed second location for
+      KeePass `.kdbx`, 1Password Emergency Kit PDFs, `.env` backups, SSH
+      private keys "for backup", Bitwarden exports.
+
+      62. Enumerate cloud-storage roots that exist on the host:
+            macOS:
+              <home>/Library/CloudStorage/Dropbox*
+              <home>/Library/CloudStorage/GoogleDrive-*
+              <home>/Library/CloudStorage/OneDrive*
+              <home>/Library/Mobile Documents/com~apple~CloudDocs
+            Linux:
+              <home>/Dropbox
+              <home>/OneDrive
+              <home>/google-drive
+            Windows:
+              <userprofile>/Dropbox*
+              <userprofile>/OneDrive*
+              <userprofile>/iCloudDrive
+          Use `ls -d <pattern> 2>/dev/null` for each; only walk the ones
+          that exist. These roots are then ADDED to:
+            - the Phase 3 .env-discovery root list (re-run finds 15/16 there)
+            - the Phase 5.5 Downloads private-key sweep
+            - the Phase 10 password-manager-artifact searches
+
+      63. Unified filename-pattern sweep over <home>/Downloads,
+          <home>/Desktop, <home>/Documents, AND every cloud-storage root
+          from step 62.
+
+          **macOS budget-critical rule:** the `find -iregex` form below
+          will issue one walk per root and easily consume 40–60 commands
+          on a populated dev host. On macOS you MUST use `mdfind` first,
+          which returns the full result set in one command. Only fall
+          back to `find` when `mdfind` is unavailable or returned 0
+          results AND Spotlight indexing is known to be off (`mdutil -s
+          /` shows "Indexing disabled"). Ignoring this rule is the
+          single most common cause of late phases (Downloads sweep,
+          Section-K sweep) being dropped under turn budget.
+
+            macOS — REQUIRED single command:
+              `mdfind "kMDItemFSName == '*emergency*' || \
+                       kMDItemFSName == '*recovery*' || \
+                       kMDItemFSName == '*backup*' || \
+                       kMDItemFSName == '*export*' || \
+                       kMDItemFSName == '*credentials*' || \
+                       kMDItemFSName == '*password*' || \
+                       kMDItemFSName == '*secret*' || \
+                       kMDItemFSName == '*api_key*' || \
+                       kMDItemFSName == '*wallet*' || \
+                       kMDItemFSName == '*seed*'"`
+            macOS-only-if-mdfind-missing / Linux / Windows:
+              `find <root> -maxdepth 4 -type f -iregex \
+                ".*\\(creds?\\|credentials?\\|password\\|passwd\\|secret\\|api[_-]?key\\|token\\|auth\\|access[_-]?key\\|emergency\\|recovery\\|backup\\|export\\|vault\\|wallet\\|seed\\|mnemonic\\|private[_-]?key\\)\\.\\(txt\\|md\\|csv\\|json\\|xlsx?\\|docx?\\|pdf\\|rtf\\|html?\\|kdbx\\|1pif\\|kdb\\|key\\|pem\\|p12\\|pfx\\|jks\\|ppk\\)$" \
+                2>/dev/null`
+          Plus home-dir tarballs (often left in Downloads after a
+          provisioning event):
+              `find <root> -maxdepth 3 -type f -iregex \
+                ".*\\(home\\|backup\\|laptop\\|workstation\\).*\\.\\(tar\\.gz\\|tgz\\|zip\\|7z\\|dmg\\)$" \
+                2>/dev/null`
+
+          For each match: stat for size + mtime; do NOT auto-extract
+          archives or decode binary formats. The presence of the file at
+          the path is the finding. Severity: HIGH baseline; CRITICAL when
+          the filename matches an unambiguous pattern like `1password*emergency*kit*.pdf`,
+          `bitwarden_export*.{json,csv}`, `lastpass*export*.csv`, or any
+          `*.kdbx` with an adjacent `*.key`.
+
+    PHASE 14 — Electron session vaults (NEW in v1.2.0):
+      Generalized detection: any directory containing both
+      `Local Storage/leveldb/` and `Cookies` (SQLite) under a known
+      Electron-app userdata root is a session-vault candidate. Per the
+      report, most Electron apps still leak tokens via leveldb because
+      `safeStorage` adoption is patchy; Discord and many smaller apps
+      still rely on plaintext leveldb for non-cookie secrets.
+
+      64. Enumerate candidate apps. Use `ls -d <pattern>` for each so the
+          AI knows which apps are installed before walking them:
+            macOS:
+              <home>/Library/Application Support/{Slack,discord,
+                                                   discordcanary,
+                                                   discordptb,
+                                                   Microsoft/Teams,
+                                                   Notion,Linear,Figma,
+                                                   Postman,Insomnia,
+                                                   Signal,Element}
+              <home>/Library/Containers/com.tinyspeck.slackmacgap/Data/Library/Application\ Support/Slack
+              <home>/Library/Containers/com.microsoft.teams2
+            Windows:
+              <appdata>/{Slack,discord,Microsoft/Teams,Notion,Linear,
+                          Figma,Postman,Insomnia,Signal}
+              <localappdata>/Packages/MSTeams_*/                # new Teams
+            Linux:
+              <home>/.config/{Slack,discord,Microsoft/Teams,Notion,Linear,
+                              Figma,Postman,Insomnia,Signal,Element}
+
+      65. For each candidate dir that exists, run:
+            `ls -la <dir>/Local\ Storage/leveldb/ 2>/dev/null`
+            `ls -la <dir>/Cookies 2>/dev/null`
+            `ls -la <dir>/Network/Cookies 2>/dev/null`
+          Then `strings` extraction + grep for the token panel:
+            `strings <dir>/Local\ Storage/leveldb/*.ldb 2>/dev/null | \
+             grep -E "(xoxc-[A-Za-z0-9-]{10,}|xoxa-[A-Za-z0-9-]{10,}| \
+                       xoxb-[A-Za-z0-9-]{10,}|sk-ant-[A-Za-z0-9_-]{20,}| \
+                       Bearer [A-Za-z0-9_.-]{20,}|eyJ[A-Za-z0-9_.-]{20,}| \
+                       gho_[A-Za-z0-9_]{30,}|ghu_[A-Za-z0-9_]{30,}| \
+                       github_pat_[A-Za-z0-9_]{30,}|sk_live_[A-Za-z0-9]{20,}| \
+                       sk_test_[A-Za-z0-9]{20,})" | head -20`
+          Also greppable for Discord token shapes:
+            `strings <dir>/Local\ Storage/leveldb/*.ldb 2>/dev/null | \
+             grep -E "[A-Za-z0-9_-]{24}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27}|mfa\.[A-Za-z0-9_-]{84}" | head -10`
+
+      66. Signal-specific check (the report notes Signal migrated to
+          safeStorage in 2024 but the legacy plaintext key still appears
+          in older installs):
+            `cat <dir>/config.json 2>/dev/null`
+          Look for top-level fields:
+            "key": "<hex>"           — LEGACY plaintext SQLCipher key →
+                                       CRITICAL (still recoverable in
+                                       some pre-2024 installs).
+            "encryptedKey": "..."    — Post-Sept-2024 sealed-by-OS key.
+            "safeStorageBackend": "<value>"
+              "basic_text"           — Linux without Secret Service →
+                                       DB key is plaintext-recoverable →
+                                       CRITICAL.
+              "gnome_libsecret" / "kwallet5" / "DPAPI" / "Keychain" →
+                                       sealed; existence-only.
+
+      Severity: any token-pattern hit in leveldb is CRITICAL (Slack `xoxc-`
+      bypasses MFA; Discord token gives full account access; bare `eyJ`
+      JWTs are HIGH pending issuer identification).
+
+    PHASE 15 — Windows surface (NEW; runs only when Phase 1 detected
+                 Windows / Git Bash / WSL):
+
+      67. DPAPI-protected user-secret directories (existence + counts only;
+          decryption is out of scope):
+            `ls -la <appdata>/Microsoft/Credentials/ 2>/dev/null`
+            `ls -la <localappdata>/Microsoft/Credentials/ 2>/dev/null`
+            `ls -la <appdata>/Microsoft/Vault/ 2>/dev/null`
+            `ls -la <localappdata>/Microsoft/Vault/ 2>/dev/null`
+            `ls -la <appdata>/Microsoft/Protect/ 2>/dev/null`   # DPAPI master keys
+          Each populated dir is HIGH (the underlying secrets are recoverable
+          by an in-process DPAPI call from the same user — `mimikatz dpapi::cred`
+          / `SharpDPAPI`).
+
+      68. Credential Manager enumeration (no decryption needed for
+          enumeration):
+            `cmdkey /list`
+          Look for `target=TERMSRV/<host>` (RDP saved creds) and
+          `target=Domain:` entries.
+
+      69. WinSCP saved sessions. Passwords stored with hostname-keyed
+          reversible XOR — flag CRITICAL even though we don't decrypt:
+            `reg query "HKCU\\Software\\Martin Prikryl\\WinSCP 2\\Sessions"`
+          Plus INI-mode fallback:
+            `find <userprofile> -maxdepth 4 -name "WinSCP.ini" 2>/dev/null`
+
+      70. PuTTY:
+            `reg query "HKCU\\Software\\SimonTatham\\PuTTY\\Sessions"`
+            `reg query "HKCU\\Software\\SimonTatham\\PuTTY\\SshHostKeys"`
+          Plus `*.ppk` private keys via Phase 5.5 sweep extended to
+          `<userprofile>/Documents`:
+            `find <userprofile>/Documents <userprofile>/Desktop \
+                  <userprofile>/Downloads -maxdepth 3 -name "*.ppk" 2>/dev/null`
+
+      71. FileZilla (default config: passwords are base64 plaintext):
+            `cat <appdata>/FileZilla/sitemanager.xml 2>/dev/null`
+            `cat <appdata>/FileZilla/recentservers.xml 2>/dev/null`
+          Grep for `<Pass encoding="base64">` — non-empty value is
+          CRITICAL (trivial decode). When `<Pass encoding="base64"
+          encrypted="...">` appears, master password is set; offline
+          brute-force only.
+
+      72. RDP `.rdp` files (encode hostname/username; password is in
+          Credential Manager from step 68):
+            `find <userprofile>/Documents <userprofile>/Desktop \
+                  -maxdepth 3 -name "*.rdp" 2>/dev/null`
+
+      73. PSReadLine history (per-user PowerShell history; persists
+          indefinitely, common location for pasted secrets):
+            `cat <appdata>/Microsoft/Windows/PowerShell/PSReadLine/ConsoleHost_history.txt 2>/dev/null`
+          Run the same broad token-pattern grep panel from Phase 4 step 22
+          over the file.
+
+      74. Git Credential Manager file store (when configured):
+            `ls -la <localappdata>/GitCredentialManager/store/ 2>/dev/null`
+            `ls -la <home>/.gcm/store/ 2>/dev/null`
+          For populated dirs, walk for `*.credential` files and `cat` them.
+
+      75. Recycle Bin sweep (recovery is trivial via standard Windows API):
+            `ls -la "C:/\$Recycle.Bin/" 2>/dev/null`
+          For each SID-named subdir found, list contents and grep filenames
+          for the same patterns as Phase 13 step 63.
+
+      76. WSL passthrough — every Linux dotfile credential is reachable
+          from the Windows host without entering WSL:
+            `wsl -l -v`
+          For each distro listed, walk `\\\\wsl$\\<distro>\\home\\<user>\\`
+          applying Phases 2, 3, 6, 6.5. Path form for the agent:
+            `ls -la //wsl$/<distro>/home/<user>/.aws/ 2>/dev/null`
+            `cat //wsl$/<distro>/home/<user>/.aws/credentials 2>/dev/null`
+            `find //wsl$/<distro>/home/<user> -maxdepth 6 -name ".env" 2>/dev/null`
+          (Forward-slash paths work in Git Bash / MSYS2 to access UNC
+          paths.)
+
+      77. Windows Hello / WAM token recon (existence-only, marked E-OOS —
+          extraction would prompt the biometric/PIN gesture):
+            `ls -la <localappdata>/Packages/Microsoft.AAD.BrokerPlugin_*/ 2>/dev/null`
+          Record presence; do NOT attempt extraction.
+
+    PHASE 16 — Generalized Section-K sweep (NEW; Patterns 1, 5, 6):
+      The closing phase. Catches tools and shapes the named-path phases
+      miss. Runs LAST so prior phases have already taken their precision
+      hits — this is the wide net.
+
+      78. Pattern 1 — CLI tool dotdir generalizer.
+          List every immediate child of:
+            <home>/.config/
+            <home>/                  (only entries starting with `.`)
+            <home>/Library/Application\ Support/    (macOS)
+            <appdata>/                              (Windows)
+            <localappdata>/                         (Windows)
+          For each child dir, list its contents:
+            `ls <dir> 2>/dev/null`
+          If any of these names appear:
+            `credentials*`, `credential*`, `auth*`, `token*`, `session*`,
+            `config.json`, `config.toml`, `config.yaml`, `config.yml`,
+            `settings.json`, `*.netrc`, `hosts.yml`, `hosts.json`
+          Then `cat` each match (capped by `head -512`) and run the
+          Pattern-5 regex panel (step 79) over the content.
+
+      79. Pattern 5 — embedded-token regex panel (cross-platform). For each
+          file identified by step 78, by Phase 3 (.env), or by Phase 13:
+            `grep -E "(\
+              (ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{36,255}|\
+              glpat-[A-Za-z0-9_-]{20,}|\
+              xox[baprs]-([A-Za-z0-9-]+-){2,4}[A-Za-z0-9]{24,}|\
+              xapp-1-[A-Z0-9]+-[0-9]+-[a-z0-9]+|\
+              xoxc-[A-Za-z0-9-]{10,}|\
+              sk-ant-(api03|admin)-[A-Za-z0-9_-]{80,}|\
+              sk-proj-[A-Za-z0-9_-]{40,}|\
+              sk-[A-Za-z0-9]{20,}|\
+              hf_[A-Za-z0-9]{30,}|\
+              nvapi-[A-Za-z0-9_-]{40,}|\
+              gsk_[A-Za-z0-9]{40,}|\
+              (AKIA|ASIA|AGPA|AIDA)[0-9A-Z]{16}|\
+              AIza[0-9A-Za-z_-]{35}|\
+              ya29\\.[0-9A-Za-z_-]+|\
+              dop_v1_[a-f0-9]{64}|\
+              shp(at|ss)_[a-f0-9]{32}|\
+              (sk|rk|pk)_(live|test)_[A-Za-z0-9]{24,}|\
+              SG\\.[A-Za-z0-9_-]{22}\\.[A-Za-z0-9_-]{43}|\
+              key-[a-f0-9]{32}|\
+              xkeysib-[a-f0-9]{64}-[A-Za-z0-9]{16}|\
+              EAACEdEose0cBA[0-9A-Za-z]+|\
+              npm_[A-Za-z0-9]{36}|\
+              pypi-AgEIcHlwaS5vcmc[A-Za-z0-9_-]+|\
+              dckr_pat_[A-Za-z0-9_-]+|\
+              eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+|\
+              A3-[A-Z0-9]{6}-([A-Z0-9]{11}|[A-Z0-9]{6}-[A-Z0-9]{5})-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}|\
+              -----BEGIN (RSA |OPENSSH |EC |DSA |PGP |ENCRYPTED )?PRIVATE KEY-----\
+              )" <file>`
+          Plus DB connection-string patterns (run separately so backslashes
+          stay readable):
+            `grep -E "(postgres(ql)?|mysql|mongodb(\\+srv)?|amqps?|redis)://[^:]+:[^@]+@[^/[:space:]]+" <file>`
+
+      80. Pattern 6 — high-entropy near keyword (best-effort heuristic).
+          For files identified by Pattern 1 / Phase 3 / Phase 13:
+            `grep -iE "(key|api|token|secret|password|auth|access|credential|bearer)[^\"']{0,25}[A-Za-z0-9+/_=-]{32,}" <file>`
+          Skip files whose path matches any of:
+            (^|/)(node_modules|vendor|\\.venv|venv|dist|build|target|\\.next|
+                  \\.nuxt|coverage|\\.git|\\.terraform|\\.gradle|\\.idea|
+                  \\.vscode|\\.dart_tool|Pods|DerivedData)/
+          And filter result lines containing any of:
+            example | sample | test | fake | dummy | placeholder |
+            xxxxxxxxxxx | 0000000000 | abcdef1234
+          Pattern 6 is heuristic — known false-positive sources are
+          public keys, version strings, hex hashes, and base64 image data.
+          Use the result to *prioritize* manual inspection, not as a
+          standalone severity driver.
+
+  fleet_strategy: |
+    Fan out with targeted checks based on what the pathfinder found.
+    Do not sweep generically — precision matters at fleet scale.
+
+    For each host, first run `uname -s` and `whoami` to confirm the OS and
+    derive <home>:
+      macOS (Darwin): <home> = /Users/<user>
+      Linux:          <home> = /home/<user>
+
+    If pathfinder found <home>/.aws/credentials:
+      → All hosts: `cat <home>/.aws/credentials`
+        Note: number of profiles, presence of AKIA keys, profile names
+        containing "prod", "admin", "root".
+
+    If pathfinder found passphrase-less SSH keys:
+      → All hosts: `ls -la <home>/.ssh/`
+        For positive hits (id_* without .pub): `head -3 <home>/.ssh/<key>`
+        Target: identify hosts where the key is passphrase-less AND the
+        authorized_keys on other hosts may trust it.
+
+    If pathfinder found .env files with live keys:
+      → All hosts: walk the same root list as the pathfinder Phase 3, each
+        at maxdepth 6. Roots: <home>, <home>/Documents, <home>/Downloads,
+        <home>/Desktop, <home>/projects, <home>/code, <home>/src,
+        <home>/work, /opt, /srv. For positive hits: `cat <path>` and run
+        the Phase 2.5 permissions audit + Phase 3 step 19 git-tracked check.
+
+    If pathfinder found tracked secrets (Phase 6.5):
+      → All hosts: for every .git/config under <home> (find -maxdepth 6),
+        `git -C <repo_root> ls-files` filtered by the same regex as
+        pathfinder step 36.
+
+    If pathfinder found a passphrase-less SSH key, weak permissions on
+    credential files, or rc-backup credentials:
+      → All hosts: re-run those exact phases. These are the highest-yield
+        fleet-wide checks — a single bad practice on the pathfinder host
+        usually means the same pattern at scale.
+
+    If pathfinder found git-embedded tokens:
+      → All hosts:
+          `find <home> -maxdepth 6 -name "config" -path "*/.git/config"`
+        For positive hits: `grep -i "https://" <path>`
+
+    Use `grep -l` (files-only mode) to confirm existence before reading
+    content at scale. On hosts where the initial targeted check returns
+    nothing, do not expand further.
+
+    Aggregate fleet results as: (credential_type, severity, is_production)
+    tuples with a count per type. The fleet report answers: "how many hosts
+    have CRITICAL credentials, and what types dominate?"
+
+  iteration_criteria: |
+    **Iterate in batches.**  When findings prompt multiple independent
+    follow-up checks, batch them: use `puck_run_batch` to dispatch
+    several (hostname, command) tuples in one call, or `puck_query_fleet`
+    for the same command across many hosts.  Issuing them as multiple
+    parallel tool calls in one response also works.  Don't serialise
+    unrelated commands one at a time.
+
+    Continue iterating when:
+      - A new credential type was found that hasn't been fully characterized.
+        Example: found AWS creds but haven't checked shell history yet.
+      - Multiple .env files were discovered but only some have been read,
+        permissions-audited, or checked for git-tracking.
+      - Any private key was found but the passphrase status of every key
+        has not yet been recorded.
+      - A .git/config with an embedded token was found; the containing repo
+        directory may have additional credential files (run Phase 6.5).
+      - A shell rc backup file was listed but not yet grep'd.
+      - Running as root or /home has multiple users not yet checked.
+      - An Electron app userdata dir was listed (Phase 14) but its leveldb
+        files have not yet been strings-grep'd.
+      - On Windows, `wsl -l -v` returned distros that have not yet been
+        walked via `\\\\wsl$\\<distro>\\` paths.
+      - Phase 16 Pattern 1 surfaced a candidate dotdir whose files have
+        not yet been cat'd through the Pattern 5 regex panel.
+      - Phase 13 cloud-storage roots were listed but not yet swept with
+        the filename-pattern regex.
+
+    Stop iterating when:
+      - All Phases 2–16 have been run for the current user and returned
+        nothing new.
+      - A second iteration adds no new credential types.
+      - max_turns is approaching — write the analysis report rather than
+        expanding discovery further. The analysis report is REQUIRED;
+        partial coverage with a written report beats full coverage with
+        no report.
+
+  analysis_template: |
+    **Lead with the TL;DR block.**  Before the detailed forensic
+    record below, the report MUST start with the
+    `## TL;DR — analyst quick read` + `## Indicators` blocks defined in
+    the `puck://reference/analyst-tldr-template` resource (read it via
+    resources/read if you haven't already).  Five-value Verdict enum
+    (CLEAN / NORMAL-USE / NOTABLE / CONCERNING / ACTIVE-COMPROMISE) —
+    use NORMAL-USE for developer/research workstations where credential
+    density is consistent with the host's role; reserve NOTABLE for
+    real hygiene issues and CONCERNING for real exposure.  Don't bury
+    the verdict in prose.
+
+    After the TL;DR + Indicators, render the detailed credential-
+    exposure record:
+
+    ## Credential Exposure Report — <hostname>
+
+    ### Finding Index
+    One line per finding:
+      [CRITICAL] <type> (<prefix>) at <path> — <one-line characterization>
+      [HIGH]     <type> at <path> — <characterization>
+      [MEDIUM]   <type> at <path> — <characterization>
+
+    ### Detailed Findings
+    For each finding:
+    - **Path**: exact file path
+    - **Type**: credential type and 4-char identifying prefix only
+    - **Identifiers**: full values of every identifier-class field the
+      credential carries (per the per-credential-type table in the
+      objective). Examples by type:
+        AWS:    AccessKeyId AKIAEXAMPLE12345678; account 123456789012;
+                profile "prod-admin"; region us-east-1
+                (SSO entries also: startUrl, accountId, roleName,
+                expiresAt)
+        GitHub: host github.com; token-type ghp_; user "octocat" (if
+                config exposes it)
+        Slack:  workspace acme.slack.com
+        SSH:    file ~/.ssh/id_ed25519; type ed25519; comment
+                "alice@laptop"; fingerprint SHA256:…
+      Identifiers MUST be surfaced in full — they are how the responder
+      attributes the finding and rotates the right credential. Omitting
+      them turns a CRITICAL finding into "something somewhere is bad",
+      which isn't actionable.
+    - **Severity**: CRITICAL / HIGH / MEDIUM / E-OOS with justification
+    - **Production indicator**: filename (.env.production), profile name
+      (prod-admin), live key prefix (sk_live_ vs sk_test_), etc.
+    - **Access implication**: what does this credential grant access to?
+      (AWS account, GitHub repos, Stripe billing, Slack workspace, etc.)
+      When an identifier resolves the access scope (e.g., AccessKeyId
+      starts with ASIA → temporary STS session; SSO roleName is
+      "AdministratorAccess"), say so here.
+
+    ### SSH Key Passphrase Status (REQUIRED — must include every key found)
+    One row per private-key candidate from Phase 2 step 9. If you found zero
+    keys, write "no private keys present". An empty section is a defect.
+      ~/.ssh/id_rsa      — PASSPHRASE-LESS (CRITICAL)
+      ~/.ssh/id_ed25519  — PASSPHRASE-PROTECTED (HIGH)
+      ~/.ssh/<other>     — <status>
+
+    ### File Permissions Findings (REQUIRED)
+    One row per credential-bearing file you stat'd, with the mode and whether
+    it violates the per-file expectation (e.g., .aws/credentials should be
+    0600). Include EVERY file you read for credentials, even if its mode was
+    correct — absence of a row reads as "not checked".
+      <path>  mode <oct>  expected <oct>  status: OK | LOOSE
+
+    ### Git-Tracked Credentials (REQUIRED if any .git/config found)
+    One row per file returned by Phase 6.5 step 36, with the starting commit
+    hash from step 37 for the remediator. If no git repos were found, write
+    "no git repositories under <home>". An empty section after .git/configs
+    were found is a defect.
+      <repo_root>/<relative_path>  first-committed: <hash>  type: <credential>
+
+    ### Cloud Credential Handoff — Next-Pass Skills (REQUIRED if any
+                                                       cloud credentials
+                                                       surfaced)
+
+    credential-exposure is the discovery scanner; per-platform
+    blast-radius skills do the actual principal characterization
+    (validity, attached policies, dangerous-action surface, recent
+    activity). This section emits the exact next-pass inputs the
+    operator should paste into puck_investigate.
+
+    #### AWS — aws-blast-radius (v1.1.0+)
+
+    Render this block when any AWS principal was surfaced (AKIA/ASIA
+    keys, ~/.aws/credentials profiles, or SSO/STS cache files).
+    Inputs come from Phase 2 steps 6, 8, 8a, and Phase 12.
+
+    ```
+    skill = "aws-blast-radius"
+    query = "Characterize AWS principals surfaced by credential-exposure
+             run <investigation-id> on <hostname>."
+    inputs:
+      access_key_ids:  [<full AKIA + ASIA values from Phases 2 / 4>]
+      sso_cache_paths: [<absolute paths to ~/.aws/sso/cache/*.json
+                         session entries from Phase 2 step 8 —
+                         registration entries excluded>]
+      prod_account_ids: []   # OPTIONAL but recommended; if you know
+                             #   which AWS account IDs are
+                             #   production, populate them to
+                             #   anchor severity. Without this,
+                             #   aws-blast-radius classifies via
+                             #   role-name heuristics (one tier
+                             #   softer than declared).
+      dev_account_ids:  []   # OPTIONAL; same shape, for dev/sandbox
+                             #   accounts. Lets aws-blast-radius
+                             #   default to INFO for active engineer
+                             #   activity instead of crying wolf.
+      simulate:        true  # Default; runs iam simulate-principal-policy.
+      cloudtrail:      true  # Default; runs cloudtrail lookup-events.
+      time_range_days: 7     # Default; CloudTrail lookback window.
+    ```
+
+    Severity notes for the operator:
+    - File-level findings here cap at MEDIUM for routine engineer
+      sessions in default locations with default permissions (see
+      Phase 2 step 8b). aws-blast-radius computes the
+      principal-level severity, which may rate higher when authority
+      and account context line up (active admin in declared-prod →
+      CRITICAL).
+    - Files in unexpected locations (`/tmp`, `~/Downloads`,
+      git-tracked) escalate at the file-level regardless of what
+      aws-blast-radius finds.
+
+    #### Future platforms (placeholder)
+
+    Skill handoffs are planned for the same shape on other
+    platforms when the corresponding blast-radius skills ship:
+    `gcp-blast-radius`, `azure-blast-radius`, `github-blast-radius`,
+    `gitlab-blast-radius`. credential-exposure already surfaces the
+    cache files and tokens for those platforms (Phases 5, 9, 12);
+    when each blast-radius skill exists, add a matching handoff
+    block here.
+
+    ### MCP / AI Tool Token Inventory (REQUIRED)
+    One row per AI/MCP tool path inspected in Phase 9, with status:
+      <path>  status: PLAINTEXT-TOKEN | KEYCHAIN-SEALED | EMPTY | ABSENT
+    Include Keychain item names from Phase 7 step 39 (`cursor-access-token`,
+    `Claude Code-credentials`, `Zed Account Credentials`) when present.
+    If no AI/MCP tool paths exist, write "no AI/MCP tools detected".
+
+    ### Browser Stores Inventory (REQUIRED)
+    Per browser, per profile, list which of `{Login Data, Cookies, Web Data,
+    Local State, key4.db (Firefox), logins.json (Firefox)}` exist + size +
+    mtime. For Chromium on Windows, record `app_bound_encrypted_key`
+    presence in `Local State` (signals Chrome 127+ ABE).
+      <browser>/<profile>: Login_Data <size> <mtime>; Cookies <size> <mtime>;
+                           Local_State ABE_key=<yes|no>
+    If no browsers detected, write "no browser stores found". Do NOT
+    include decrypted contents — existence-only.
+
+    ### Electron Session Vault Hits (REQUIRED if any Electron apps detected)
+    Per app, count of token-pattern matches in `Local Storage/leveldb/`,
+    plus the `safeStorageBackend` value (Signal-specific) when applicable.
+      <app>: leveldb_token_hits=<count>  Cookies=<size>  safeStorage=<value-or-N/A>
+    Do NOT emit token VALUES — counts and prefix-class only (e.g., "1
+    xoxc-, 2 eyJ., 0 sk_live_"). If no Electron apps detected, write
+    "no Electron session vaults found".
+
+    ### Out-of-Scope Recon (REQUIRED)
+    Items recorded as E-OOS — exists, content extraction would prompt the
+    user or is otherwise gated. One row each:
+      <path>  reason: <Touch-ID|Hello|sealed-vault|TCC-FDA|other>
+    If no E-OOS items, write "no out-of-scope items detected". Out-of-scope
+    items are still useful intelligence (they confirm a credential surface
+    exists for follow-up via authorized means).
+
+    ### Windows Surface (REQUIRED if OS is Windows)
+    Single block summarizing Phase 15 findings:
+      Credential Manager entries (cmdkey /list): <count>
+      DPAPI Credentials dirs: <APPDATA count>, <LOCALAPPDATA count>
+      WinSCP saved sessions: <count>
+      FileZilla sitemanager.xml: <present|absent>, <plaintext-base64|encrypted>
+      PuTTY sessions: <count>;  *.ppk private keys outside .ssh: <count>
+      RDP files in Documents: <count>
+      PSReadLine token-pattern hits: <count>
+      Git Credential Manager file store entries: <count>
+      Recycle Bin credential-pattern matches: <count>
+      WSL distros: <list>;  per-distro Linux-dotfile credentials walked: <count>
+      Windows Hello / WAM packages present: <yes|no> (E-OOS)
+    If OS is not Windows, omit this section.
+
+    ### Shell History Exposure
+    If credentials appeared in shell history: note the credential type and
+    path only. Do NOT quote or reproduce the value. Note that history
+    exposure means the credential was typed or pasted interactively (may
+    have been passed to subprocesses, CI systems, or shared terminals).
+    Primary remediation is removing the line from history and setting
+    HISTIGNORE — rotation is a judgment call for the operator based on
+    whether the history file could have been read by anyone else (shared
+    host, synced dotfiles, cloud backup). Do NOT automatically recommend
+    immediate rotation for history-only findings with no other compromise
+    indicators. Also note when the finding came from the broad
+    `(token|api_key|password|secret)` pattern — that signals a
+    positional-arg secret manager (e.g. `secret-add KEY "value"`), and
+    the operator should review what that tool handles.
+
+    ### Remediation Priority
+    1. CRITICAL — act now (rotate if compromise plausible; remove exposure always)
+    2. HIGH — remediate within 24–48 hours
+    3. MEDIUM — near-term remediation
+    4. INFO — hygiene only; delete stale files (expired sessions: no rotation needed)
+
+    FINAL REMINDER — secret redaction: every secret-class field in this
+    report must appear as its type-prefix ONLY (e.g. "sk_l", "ghp_",
+    "AKIA", "xoxb", "sk-ant"). Never the actual value, never a truncated
+    excerpt, never "the first 8 characters are…". Identifier-class fields
+    (AccessKeyId, account ID, principal name, profile name, host, ARN,
+    expiresAt) are reported in full — they are not access-granting.
+    When in doubt, treat the field as secret.
+
+  remediation_guidance: |
+    After the Finding Index and Detailed Findings, include a ## Remediation
+    section structured as one subsection per finding, ordered CRITICAL first.
+
+    Use this structure for each finding:
+
+    ### <hostname> — <credential type> at <path>
+    **Severity**: CRITICAL / HIGH / MEDIUM / INFO
+    **Compromise confidence**: high / low / none (expired)
+
+    Rotation vs. exposure-removal decision:
+    - Rotate the credential ONLY when compromise confidence is high:
+      the credential is git-tracked (public or shared), there are access
+      anomalies in logs, the file was in an unexpected location (e.g., /tmp,
+      ~/Downloads, cloud-sync root), or multiple exposure vectors compound.
+    - Do NOT recommend rotation when the finding is exposure-only with no
+      compromise indicators (e.g., key appears only in bash history with no
+      other flags). In that case, removing the exposure IS the remediation.
+      The key may never have been seen by anyone else; forced rotation has a
+      cost (service disruption, update of downstream configs) that should be
+      proportional to the actual risk.
+    - Do NOT recommend rotation for already-expired STS session tokens or
+      SSO accessTokens — they are already invalid. Remediation is deletion
+      of the stale file only.
+
+    **Step 1 — Remove the exposure (always do this)**
+    ```bash
+    # Remove from bash/zsh history
+    sed -i '/AWS_SECRET_ACCESS_KEY/d' ~/.bash_history
+    sed -i '/AKIA/d' ~/.bash_history
+    history -c && history -w
+    # For zsh: edit ~/.zsh_history and restart the shell
+
+    # Remove from .env file — use the exact path found during investigation
+    sed -i '/AWS_SECRET_ACCESS_KEY/d' /exact/path/found/.env
+    sed -i '/AWS_ACCESS_KEY_ID/d' /exact/path/found/.env
+
+    # Remove rc-backup file once any credentials in it have been rotated
+    rm /exact/path/found/.zshrc.bak
+
+    # Remove stale cloud-cache file (expired sessions — delete is the only action needed)
+    rm /exact/path/found/~/.aws/sso/cache/<filename>.json
+
+    # Tighten permissions on credential stores flagged in the permissions audit
+    chmod 600 ~/.aws/credentials ~/.aws/config ~/.docker/config.json
+    chmod -R go-rwx ~/.mcp-auth/
+    ```
+
+    **Step 2 — Rotate the credential (only when compromise confidence is high)**
+    Skip this step if the finding is exposure-only with no compromise indicators.
+    If in doubt, err on the side of rotation for CRITICAL-severity findings.
+    ```bash
+    # AWS IAM key rotation example — substitute actual username and key ID
+    aws iam create-access-key --user-name <username>
+    aws iam delete-access-key --access-key-id <old-key-id> --user-name <username>
+    # Update any services/CI pipelines using the old key before deleting
+    ```
+    ```bash
+    # GitHub PAT — revoke at https://github.com/settings/tokens
+    # SSH key — remove the public key from ~/.ssh/authorized_keys on target hosts
+    ssh-keygen -R <target-host>  # remove from known_hosts if decommissioning
+    ```
+
+    **Step 3 — Prevent recurrence**
+    ```bash
+    # Add HISTIGNORE to shell rc so secrets passed on the CLI are never written
+    echo "export HISTIGNORE='*SECRET*:*KEY*:*PASSWORD*:*TOKEN*'" >> ~/.zshrc
+
+    # Remove passphrase-less SSH private key
+    rm ~/.ssh/<keyfile>
+    # Then remove its public key from ~/.ssh/authorized_keys on every host that trusted it
+    ```
+
+    **Step 4 (git-tracked findings only) — Purge from history**
+    A simple `rm` is not enough for files returned by Phase 6.5: every clone
+    of the repo, every cached build, and every fork still has the secret.
+    The credential MUST be considered compromised the moment it was committed —
+    rotate it (Step 2) regardless of other compromise indicators.
+    ```bash
+    # 1. Rotate the credential FIRST — assume it is already public.
+    # 2. Add the file to .gitignore so it never re-enters history.
+    echo ".env" >> .gitignore && git add .gitignore && git commit -m "ignore .env"
+    # 3. Purge from history. git filter-repo is the modern tool (preferred over filter-branch).
+    git filter-repo --path .env --invert-paths
+    # 4. Force-push to all remotes (this is destructive — coordinate with collaborators).
+    git push --force --all
+    git push --force --tags
+    # 5. Tell GitHub to invalidate cached views: https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository
+    # 6. Audit fork list and ask owners to delete or rebase.
+    ```
+
+    Tailor the commands to the exact file paths, variable names, and key IDs
+    found during the investigation. Include the actual path in every command —
+    never use placeholder paths in the final report.
+
+    Note if a credential appears already rotated (e.g., the key's creation date
+    in ~/.aws/credentials is old and the account may have been rotated since).
+
+inputs:
+  - name: query
+    type: string
+    description: "Scope for the investigation. Examples: 'check all credential types', 'focus on AWS and GitHub', 'find any production secrets'. Leave broad for a full sweep."
+    required: true
+
+expected_duration: "10–30 minutes depending on number of project trees, browsers, Electron apps, cloud-storage roots, and (on Windows) WSL distros found"
+max_turns: 18
+
+# Allowlist entries this skill expects. Validated at MCP server startup;
+# any missing patterns surface via puck_list_skills as status=degraded.
+# Most of these are already in the default puck-mcp.yaml — the ones
+# operators most commonly forget to enable after upgrading are listed
+# at the top of this block.
+required_commands:
+  # OS-aware credential-store inspection (post-v1.0.0 additions; often
+  # missing on older puck-mcp.yaml deployments)
+  - "security list-keychains"
+  - "security dump-keychain"
+  - "plutil -p"
+  - "defaults read"
+  - "reg query"
+  - "cmdkey /list"
+  - "wsl -l"
+  - "wsl --list"
+  # Windows-native escape hatch — added with the OS-adaptation paragraph
+  # so Phases 2-14 work without Git Bash.  See puck://reference/os-adaptation.
+  - "powershell -Command Get-*"
+  - findstr
+  - tasklist
+  - where
+  # Git-tracked secret detection (v1.1.0 addition)
+  - "git ls-files"
+  - "git log"
+  # Spotlight-accelerated sweep (v1.1.0+)
+  - mdfind
+  # Core read primitives (always in default allowlist; listed for
+  # completeness so a stripped-down operator config will still flag).
+  - cat
+  - head
+  - grep
+  - find
+  - ls
+  - stat
+  - strings
+  - file
+  - uname
+  - id
+  - whoami
+  # `aws sts get-caller-identity` is referenced in the skill prose as the
+  # canonical AWS-credential verification verb.  The skill itself never
+  # invokes it (it reads dotfiles and emits handoffs to aws-blast-radius)
+  # but declaring it documents the dependency and silences the audit.
+  - "aws sts get-caller-identity"

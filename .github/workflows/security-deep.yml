@@ -1,0 +1,37 @@
+# security-deep.yml — weekly + every release tag.
+#
+# OSV-Scanner is the most thorough cross-language vuln scanner
+# (Go modules + cargo + git submodules + npm + pypi + ...).  Slower
+# than the fast tier — runs on a schedule and on release tags so the
+# release itself is gated.
+name: security-deep
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"   # Monday 06:00 UTC — same window as Dependabot
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  osv-scanner:
+    name: osv-scanner (cross-language vulns)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+      - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32  # v5.0.2
+        with:
+          go-version: '1.22'
+      - name: Install osv-scanner
+        # google/osv-scanner is a single Go binary; install via the
+        # module proxy.  Pinned version closes the supply-chain gap
+        # vs google/osv-scanner-action which auto-updates.
+        run: go install github.com/google/osv-scanner/cmd/osv-scanner@v1.9.2
+      - name: Scan
+        # --recursive walks the tree finding go.sum, Cargo.lock, etc.
+        # Exits non-zero on any vuln; on a release tag this gates the
+        # release.
+        run: osv-scanner --recursive .
