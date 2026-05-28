@@ -179,6 +179,6 @@ The easiest way to contribute is a new investigation skill. Skills are YAML -- n
 
 MIT.  See [LICENSE](LICENSE).
 
-Contributors sign a CLA on first PR — see [CLA.md](CLA.md) and [CLA.md](CLA.md).
+Contributors sign a CLA on first PR — see [CLA.md](CLA.md).
 
 Copyright (c) 2026 Puck Security, Inc.
