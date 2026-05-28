@@ -58,6 +58,10 @@ func TestEnsureCA_IdempotentOnSecondCall(t *testing.T) {
 }
 
 func TestEnsureCA_RejectsLoosePerms(t *testing.T) {
+	// Loose-perms enforcement is Unix-only — see ca_windows.go for why.
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX mode bits don't apply on Windows")
+	}
 	dir := t.TempDir()
 	_ = os.Chmod(dir, 0o700)
 	certPath := filepath.Join(dir, "ca.pem")
