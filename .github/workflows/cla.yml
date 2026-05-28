@@ -24,7 +24,11 @@ jobs:
         with:
           path-to-signatures: 'signatures/version1/cla.json'
           path-to-document: 'https://github.com/puck-security/puck-scout/blob/main/CLA.md'
-          branch: 'main'
+          # Signatures live on a sidecar branch so the bot doesn't have to
+          # push to `main` (which is protected via Rulesets).  The branch
+          # `cla-signatures` is an orphan with no other history; the bot
+          # creates and updates the signature file there.
+          branch: 'cla-signatures'
           allowlist: dependabot[bot],renovate[bot]
           create-file-commit-message: 'chore: create CLA signature file'
           signed-commit-message: 'docs(cla): $contributorName signed the CLA in #$pullRequestNo'
