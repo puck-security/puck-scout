@@ -287,7 +287,7 @@ jobs:
       - name: Checksums
         run: |
           cd dist
-          sha256sum puck-agent-* puck-mcp-* puck-scout-skills.tar.gz *.sbom.spdx.json | tee SHA256SUMS
+          sha256sum ./puck-agent-* ./puck-mcp-* ./puck-scout-skills.tar.gz ./*.sbom.spdx.json | tee SHA256SUMS
 
       # Keyless cosign signing via GitHub OIDC.  No long-lived key
       # material — the signature includes the certificate that bound
@@ -336,7 +336,7 @@ jobs:
         working-directory: dist
         run: |
           set -euo pipefail
-          hashes=$(sha256sum puck-agent-* puck-mcp-* puck-scout-skills.tar.gz *.sbom.spdx.json | base64 -w0)
+          hashes=$(sha256sum ./puck-agent-* ./puck-mcp-* ./puck-scout-skills.tar.gz ./*.sbom.spdx.json | base64 -w0)
           echo "hashes=$hashes" >> "$GITHUB_OUTPUT"
 
       - name: Release
