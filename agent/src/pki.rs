@@ -63,7 +63,7 @@ pub fn enforce_mode_0600(path: &Path) -> Result<()> {
                 mode
             );
         }
-        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage -- libc::geteuid is FFI; no safe equivalent in std.
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         let euid = unsafe { libc::geteuid() };
         if meta.uid() != euid {
             bail!(

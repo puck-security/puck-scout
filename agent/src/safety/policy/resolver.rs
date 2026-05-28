@@ -41,7 +41,7 @@ fn check_candidate(path: &Path) -> Result<(), &'static str> {
     }
     #[cfg(unix)]
     {
-        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage -- libc::geteuid is FFI; no safe equivalent in std.
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         let euid = unsafe { libc::geteuid() };
         if euid == 0 {
             return ancestors_root_owned_safe(path);
