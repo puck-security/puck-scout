@@ -81,11 +81,14 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install semgrep
-        # setuptools (which provides pkg_resources) is no longer installed
-        # by default in Python 3.12 — semgrep 1.85.0 imports pkg_resources
-        # at startup and crashes without it.  Install setuptools first.
+        # setuptools (provides pkg_resources) is no longer installed by
+        # default in Python 3.12.  semgrep 1.85.0 transitively imports
+        # opentelemetry-instrumentation, which still does
+        # `from pkg_resources import ...` — and setuptools >= 81 stopped
+        # vendoring pkg_resources.  Pin to a setuptools that still ships
+        # it so semgrep can boot.
         run: |
-          pip install --upgrade setuptools
+          pip install 'setuptools<81'
           pip install semgrep==1.85.0
       - name: Scan
         # --error: non-zero exit on findings (gate the merge)
