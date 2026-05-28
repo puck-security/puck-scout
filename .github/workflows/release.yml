@@ -204,9 +204,10 @@ jobs:
           VERSION_RAW="${GITHUB_REF_NAME#v}"
           IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION_RAW"
           MAJOR=${MAJOR:-0}; MINOR=${MINOR:-0}; PATCH=${PATCH:-0}
-          ARM_FLAG=$([ "${{ matrix.goarch }}" = "arm64" ] && echo "-arm" || echo "")
+          ARGS=(-64)
+          [ "${{ matrix.goarch }}" = "arm64" ] && ARGS+=(-arm)
           goversioninfo \
-            -64 $ARM_FLAG \
+            "${ARGS[@]}" \
             -ver-major="$MAJOR" -ver-minor="$MINOR" -ver-patch="$PATCH" \
             -product-ver-major="$MAJOR" -product-ver-minor="$MINOR" -product-ver-patch="$PATCH" \
             -file-version="${VERSION_RAW:-0.0.0}" \
