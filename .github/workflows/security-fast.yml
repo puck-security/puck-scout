@@ -42,7 +42,17 @@ jobs:
         with:
           go-version: '1.22'
       - name: Install gitleaks
-        run: go install github.com/gitleaks/gitleaks/v8@v8.18.4
+        # Binary release — avoids the `go install` path issue where older
+        # tags still declare `github.com/zricethezav/gitleaks/v8` as the
+        # module name even after the repo transferred to the gitleaks org.
+        # TODO: add SHA256 pin to the tarball once a release is chosen and
+        # the hash is verified out-of-band.
+        run: |
+          GITLEAKS_VERSION=8.24.2
+          curl -fsSL -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo install /tmp/gitleaks /usr/local/bin/
       - name: Scan
         run: gitleaks detect --redact --no-banner --exit-code 1
 
@@ -71,7 +81,12 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install semgrep
-        run: pip install semgrep==1.85.0
+        # setuptools (which provides pkg_resources) is no longer installed
+        # by default in Python 3.12 — semgrep 1.85.0 imports pkg_resources
+        # at startup and crashes without it.  Install setuptools first.
+        run: |
+          pip install --upgrade setuptools
+          pip install semgrep==1.85.0
       - name: Scan
         # --error: non-zero exit on findings (gate the merge)
         # --metrics=off: don't phone home with usage stats
