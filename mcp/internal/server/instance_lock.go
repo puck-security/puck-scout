@@ -25,8 +25,8 @@ func AcquireInstanceLock(pidfilePath string) (*flock.Flock, error) {
 	if !locked {
 		existing, _ := os.ReadFile(pidfilePath)
 		return nil, fmt.Errorf(
-			"another puck-mcp instance holds %s (pid %s). "+
-				"Stop that instance first. If it's stale, remove the pidfile.",
+			"another puck-mcp instance holds %s (pid %s); "+
+				"stop that instance first, or remove the pidfile if it is stale",
 			pidfilePath, strings.TrimSpace(string(existing)))
 	}
 	// Write the PID so `puck-mcp doctor` and operators can see who's holding

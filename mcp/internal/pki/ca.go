@@ -54,12 +54,12 @@ func EnsureCA(certPath, keyPath string) (*CA, error) {
 		return nil, fmt.Errorf(
 			"CA half-state: %s exists but %s is missing. "+
 				"To recover: delete %s (this orphans every issued agent cert; agents must re-enroll) "+
-				"and restart puck-mcp to regenerate the CA.", keyPath, certPath, keyPath)
+				"and restart puck-mcp to regenerate the CA", keyPath, certPath, keyPath)
 	case !keyExists && certExists:
 		return nil, fmt.Errorf(
 			"CA half-state: %s exists but %s is missing. "+
 				"To recover: delete %s and restart puck-mcp to regenerate the CA "+
-				"(this orphans every issued agent cert; agents must re-enroll).",
+				"(this orphans every issued agent cert; agents must re-enroll)",
 			certPath, keyPath, certPath)
 	default:
 		return generateCA(certPath, keyPath)
