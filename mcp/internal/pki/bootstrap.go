@@ -215,7 +215,9 @@ func (l *TokenLedger) appendRecord(rec tokenRecord) error {
 // gofrs/flock uses POSIX advisory locks on Unix and LockFileEx on Windows;
 // either way the semantics are "blocks only on an exclusive writer".
 func (l *TokenLedger) readAll() ([]tokenRecord, error) {
-	lk := flock.New(l.path)
+	// Sidecar `.lock` file (not l.path itself) so that writeAll's
+	// rename-over-l.path doesn't fight an open handle on Windows.
+	lk := flock.New(l.path + ".lock")
 	if err := lk.RLock(); err != nil {
 		return nil, fmt.Errorf("acquire ledger read lock: %w", err)
 	}
@@ -270,13 +272,16 @@ func (l *TokenLedger) readAll() ([]tokenRecord, error) {
 }
 
 // writeAll serialises records to a tmp file and renames it over the live path.
-// An exclusive write lock on the live path is held from before the tmp write
-// through to after the rename, providing cross-process serialisation with
-// concurrent generate-bootstrap-token runs and daemon Spend calls.
+// An exclusive write lock on a sidecar `<path>.lock` file is held from before
+// the tmp write through to after the rename, providing cross-process
+// serialisation with concurrent generate-bootstrap-token runs and daemon
+// Spend calls.  The lock must NOT live on l.path itself: Windows refuses to
+// rename-over a path that has an open handle, and gofrs/flock on Windows
+// uses LockFileEx which keeps the file open.
 // Lock is blocking-fair via gofrs/flock (POSIX advisory on Unix, LockFileEx
 // on Windows).
 func (l *TokenLedger) writeAll(records []tokenRecord) error {
-	lk := flock.New(l.path)
+	lk := flock.New(l.path + ".lock")
 	if err := lk.Lock(); err != nil {
 		return fmt.Errorf("acquire ledger write lock: %w", err)
 	}
