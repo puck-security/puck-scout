@@ -4,7 +4,7 @@ Rust binary that runs on customer endpoints and executes read-only commands for 
 
 ## Status
 
-Stub implementation. The agent compiles and runs but does not yet execute commands or communicate with the MCP server.
+Read-only command executor for autonomous endpoint investigation. Communicates with the MCP server over mTLS, validates commands against a compiled-in typed allowlist, and returns structured results.
 
 ## Architecture
 

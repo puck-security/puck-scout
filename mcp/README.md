@@ -4,7 +4,7 @@ Go binary that implements the MCP protocol and orchestrates investigations betwe
 
 ## Status
 
-Stub implementation. The server compiles and runs but does not yet serve MCP requests or communicate with endpoint agents.
+Orchestrates investigations between MCP clients (Claude Code, Cursor) and endpoint agents. Loads skills, validates commands against the policy engine, fans out to agents over mTLS, and writes audit logs.
 
 ## Architecture
 

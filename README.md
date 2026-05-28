@@ -75,7 +75,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/puck-security/puck-oss/main/
 
 This generates a CA, server cert, and config. If the `claude` CLI is installed, it auto-registers Puck as an MCP server — no manual config needed. Otherwise it prints the command to register manually.
 
-> **If your MCP host might roam between networks** (laptop, dynamic IP), pick a stable name first — Tailscale / DDNS / static hostname — and pass it as `--hostname`. See [Getting Started → deployment patterns](docs/getting-started.md#first--choose-a-deployment-pattern). If you already enrolled agents and your address changes, `puck-mcp rotate-server-cert --add-san <new-name-or-ip>` fixes it without re-enrolling them.
+> **If your MCP host might roam between networks** (laptop, dynamic IP), pick a stable name first — Tailscale / DDNS / static hostname — and pass it as `--hostname`. See [Getting Started](docs/getting-started.md). If you already enrolled agents and your address changes, `puck-mcp rotate-server-cert --add-san <new-name-or-ip>` fixes it without re-enrolling them.
 
 **2. Enroll an endpoint**
 
@@ -107,7 +107,7 @@ Use puck to check eng-laptop-47 for credential exposure
 
 Repeat step 2 for every endpoint you want to investigate. For fleet enrollment (10+ hosts), see [Getting Started](docs/getting-started.md#multiple-hosts-fleet-enrollment).
 
-> **Local dev?** To try Puck on your own machine without deploying anything: `cd test && make test-install && make run-agent`, then ask Claude Code a question. See [Getting Started](docs/getting-started.md#try-it-now-local-dev).
+> **Local dev?** To try Puck on your own machine without deploying anything: `cd test && make test-install && make run-agent`, then ask Claude Code a question. See [Getting Started](docs/getting-started.md).
 
 For tool schemas, config fields, and CLI docs, see [Reference](docs/reference.md).
 
@@ -179,6 +179,6 @@ The easiest way to contribute is a new investigation skill. Skills are YAML -- n
 
 MIT.  See [LICENSE](LICENSE).
 
-Contributors sign a CLA on first PR — see [CLA.md](CLA.md) and [docs/contributing.md](docs/contributing.md#contributor-license-agreement).
+Contributors sign a CLA on first PR — see [CLA.md](CLA.md) and [CLA.md](CLA.md).
 
 Copyright (c) 2026 Puck Security, Inc.
