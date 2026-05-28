@@ -45,7 +45,10 @@ check_file() {
 check_mode() {
     local desc=$1 file=$2 expected=$3
     local actual
-    actual="$(stat -f '%A' "$file" 2>/dev/null || stat -c '%a' "$file" 2>/dev/null || echo UNKNOWN)"
+    # GNU stat (Linux) uses `-c '%a'`; BSD stat (macOS) uses `-f '%A'`.
+    # `stat -f` on Linux means `--filesystem` and silently prints filesystem
+    # info instead of failing, so GNU must be tried first.
+    actual="$(stat -c '%a' "$file" 2>/dev/null || stat -f '%A' "$file" 2>/dev/null || echo UNKNOWN)"
     if [[ "$actual" = "$expected" ]]; then
         PASS=$((PASS+1)); echo "PASS: $desc"
     else
