@@ -60,7 +60,7 @@ type Queue struct {
 	mu          sync.Mutex
 	pending     map[string][]CommandRequest    // hostname -> ordered list of commands
 	waiters     map[string]*Waiter             // commandID -> Waiter
-	sseChannels map[string]chan CommandRequest  // hostname -> open SSE connection channel
+	sseChannels map[string]chan CommandRequest // hostname -> open SSE connection channel
 }
 
 // NewQueue creates a new Queue.
