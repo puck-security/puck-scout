@@ -12,7 +12,10 @@ fn main() {
     {
         let mut res = winres::WindowsResource::new();
         res.set("ProductName", "Puck Agent");
-        res.set("FileDescription", "Puck endpoint agent — read-only investigation");
+        res.set(
+            "FileDescription",
+            "Puck endpoint agent — read-only investigation",
+        );
         res.set("CompanyName", "Puck Security");
         res.set("LegalCopyright", "Copyright 2026 Puck Security");
         res.set("OriginalFilename", "puck-agent.exe");

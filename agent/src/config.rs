@@ -117,11 +117,21 @@ impl AgentConfig {
         // they control, they can serve a forged MCP server cert and route the
         // agent to attacker C2.  policy_overrides_path can disable or extend
         // the compiled-in command grammar.
-        crate::integrity::enforce_not_writable_by_others(&config.tls_ca_path)
-            .with_context(|| format!("tls_ca_path integrity check ({})", config.tls_ca_path.display()))?;
+        crate::integrity::enforce_not_writable_by_others(&config.tls_ca_path).with_context(
+            || {
+                format!(
+                    "tls_ca_path integrity check ({})",
+                    config.tls_ca_path.display()
+                )
+            },
+        )?;
         if let Some(ref overrides) = config.policy_overrides_path {
-            crate::integrity::enforce_not_writable_by_others(overrides)
-                .with_context(|| format!("policy_overrides_path integrity check ({})", overrides.display()))?;
+            crate::integrity::enforce_not_writable_by_others(overrides).with_context(|| {
+                format!(
+                    "policy_overrides_path integrity check ({})",
+                    overrides.display()
+                )
+            })?;
         }
 
         Ok(config)
@@ -199,10 +209,7 @@ hostname: "testhost"
     fn load_rejects_agent_token_with_value() {
         use std::io::Write;
         let mut f = tempfile::NamedTempFile::new().unwrap();
-        let yaml = format!(
-            "{}agent_token: \"some-old-token\"\n",
-            min_yaml()
-        );
+        let yaml = format!("{}agent_token: \"some-old-token\"\n", min_yaml());
         f.write_all(yaml.as_bytes()).unwrap();
         let err = AgentConfig::load(f.path()).unwrap_err();
         assert!(
@@ -299,5 +306,4 @@ hostname: "testhost"
             "expected tls_ca_path integrity rejection, got: {msg}"
         );
     }
-
 }

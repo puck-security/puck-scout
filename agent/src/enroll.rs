@@ -82,8 +82,7 @@ pub fn run(args: EnrollArgs) -> Result<()> {
             .and_then(|pem| crate::renew::cert_validity(&pem).ok())
             .map(|v| {
                 let now = std::time::SystemTime::now();
-                now < v.not_after
-                    && !crate::renew::should_renew(v.not_before, v.not_after, now)
+                now < v.not_after && !crate::renew::should_renew(v.not_before, v.not_after, now)
             })
             .unwrap_or(false);
 
@@ -188,7 +187,10 @@ pub fn run(args: EnrollArgs) -> Result<()> {
         &args.ca_path,
     )?;
     if wrote_config {
-        println!("puck-agent: wrote {} (mode 0600)", args.config_path.display());
+        println!(
+            "puck-agent: wrote {} (mode 0600)",
+            args.config_path.display()
+        );
     } else {
         println!(
             "puck-agent: {} already exists — left untouched",
@@ -205,7 +207,10 @@ pub fn run(args: EnrollArgs) -> Result<()> {
     println!();
     println!("To run in the foreground (debug, or no service installed):");
     println!("    puck-agent serve              # uses default config path");
-    println!("    puck-agent serve --config {}", args.config_path.display());
+    println!(
+        "    puck-agent serve --config {}",
+        args.config_path.display()
+    );
     Ok(())
 }
 
@@ -225,9 +230,8 @@ fn write_runtime_config(
         return Ok(false);
     }
     if let Some(parent) = config_path.parent() {
-        std::fs::create_dir_all(parent).with_context(|| {
-            format!("create config dir {}", parent.display())
-        })?;
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create config dir {}", parent.display()))?;
     }
     // Quote with SINGLE quotes.  YAML single-quoted scalars do NOT interpret
     // backslash escapes — `'C:\Users\foo'` is the literal string we want, with
@@ -275,10 +279,12 @@ mod tests {
     /// Mirrors what setup-mcp.sh produces; the fingerprint we compute matches
     /// what `openssl x509 -fingerprint -sha256` would emit (modulo case/colons).
     fn ed25519_ca_cert() -> (String, String) {
-        let mut params = rcgen::CertificateParams::new(vec!["test-ca".to_string()])
-            .expect("rcgen params");
+        let mut params =
+            rcgen::CertificateParams::new(vec!["test-ca".to_string()]).expect("rcgen params");
         params.distinguished_name = rcgen::DistinguishedName::new();
-        params.distinguished_name.push(rcgen::DnType::CommonName, "test-ca");
+        params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, "test-ca");
         let key_pair = rcgen::KeyPair::generate_for(&rcgen::PKCS_ED25519).expect("keypair");
         let cert = params.self_signed(&key_pair).expect("self-sign");
         let pem = cert.pem();
@@ -307,9 +313,11 @@ mod tests {
         let got = ca_cert_fingerprint(&pem).expect("compute fingerprint");
         assert_eq!(got, expected, "fingerprint must match independent SHA-256");
         assert_eq!(got.len(), 64, "fingerprint must be 64 hex chars");
-        assert!(got.chars().all(|c| c.is_ascii_hexdigit() && c.is_ascii_lowercase()
-            || c.is_ascii_digit()),
-            "fingerprint must be lowercase hex: {got}");
+        assert!(
+            got.chars()
+                .all(|c| c.is_ascii_hexdigit() && c.is_ascii_lowercase() || c.is_ascii_digit()),
+            "fingerprint must be lowercase hex: {got}"
+        );
     }
 
     #[test]
@@ -400,10 +408,8 @@ mod tests {
     // that escape grammar.
     #[test]
     fn yaml_writer_round_trips_windows_paths() {
-        let tmp = std::env::temp_dir().join(format!(
-            "puck-yaml-windows-test-{}",
-            std::process::id()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("puck-yaml-windows-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         let config_path = tmp.join("puck-agent.yaml");
@@ -411,10 +417,10 @@ mod tests {
         // Realistic Windows paths with backslashes — exactly the shape
         // that broke parsing pre-fix.
         let cert_path = PathBuf::from(r"C:\Users\fridg\.config\puck-agent\cert.pem");
-        let key_path  = PathBuf::from(r"C:\Users\fridg\.config\puck-agent\cert-key.pem");
-        let ca_path   = PathBuf::from(r"C:\Users\fridg\.config\puck-agent\ca.pem");
-        let server    = "https://Raraku.local:50281";
-        let hostname  = "armorall";
+        let key_path = PathBuf::from(r"C:\Users\fridg\.config\puck-agent\cert-key.pem");
+        let ca_path = PathBuf::from(r"C:\Users\fridg\.config\puck-agent\ca.pem");
+        let server = "https://Raraku.local:50281";
+        let hostname = "armorall";
 
         let wrote = write_runtime_config(
             &config_path,
@@ -431,8 +437,9 @@ mod tests {
         // at startup.  If our writer ever regresses to double-quoted
         // scalars, this parse will fail on \U.
         let bytes = std::fs::read_to_string(&config_path).unwrap();
-        let value: serde_yaml::Value = serde_yaml::from_str(&bytes)
-            .unwrap_or_else(|e| panic!("yaml parse failed (regression to bad escape?): {e}\n--- file ---\n{bytes}"));
+        let value: serde_yaml::Value = serde_yaml::from_str(&bytes).unwrap_or_else(|e| {
+            panic!("yaml parse failed (regression to bad escape?): {e}\n--- file ---\n{bytes}")
+        });
 
         let m = value.as_mapping().expect("mapping");
         assert_eq!(
@@ -471,10 +478,8 @@ mod tests {
         // If a config file already exists, write_runtime_config must NOT
         // clobber it — operator customisations (extra paths, allowlist
         // tweaks) would otherwise be lost on re-enrollment.
-        let tmp = std::env::temp_dir().join(format!(
-            "puck-yaml-preserve-test-{}",
-            std::process::id()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("puck-yaml-preserve-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         let config_path = tmp.join("puck-agent.yaml");

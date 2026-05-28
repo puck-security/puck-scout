@@ -32,8 +32,8 @@ use std::path::Path;
 pub fn enforce_not_writable_by_others(path: &Path) -> Result<()> {
     // symlink_metadata does NOT follow symlinks — gives us metadata about
     // the symlink itself if `path` is one, so we can refuse it explicitly.
-    let meta = std::fs::symlink_metadata(path)
-        .with_context(|| format!("stat {}", path.display()))?;
+    let meta =
+        std::fs::symlink_metadata(path).with_context(|| format!("stat {}", path.display()))?;
     if meta.file_type().is_symlink() {
         bail!(
             "{} is a symlink — refuse to trust through a symlink (attacker-controlled \
@@ -76,8 +76,8 @@ pub fn enforce_not_writable_by_others(path: &Path) -> Result<()> {
 /// any future forbidden-prefix checks.
 #[cfg(test)]
 fn safe_tempdir() -> tempfile::TempDir {
-    let manifest = std::env::var("CARGO_MANIFEST_DIR")
-        .expect("CARGO_MANIFEST_DIR is set during cargo test");
+    let manifest =
+        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set during cargo test");
     let target = std::path::Path::new(&manifest).join("target");
     std::fs::create_dir_all(&target).expect("create target/ for safe_tempdir");
     tempfile::TempDir::new_in(target).expect("create safe tempdir")
@@ -163,5 +163,4 @@ mod tests {
             "expected symlink rejection, got: {err}"
         );
     }
-
 }

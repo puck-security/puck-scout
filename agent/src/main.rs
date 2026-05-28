@@ -207,14 +207,11 @@ async fn serve(config_path: &std::path::Path) -> anyhow::Result<()> {
     // /etc/puck/policy-overrides.toml with permissive contents could
     // weaken the embedded policy on agent startup — the config-load
     // integrity check only fires when the path is explicit in YAML.
-    let overrides_path = config
-        .policy_overrides_path
-        .clone()
-        .unwrap_or_else(|| {
-            std::env::var("PUCK_AGENT_CONFIG_DIR")
-                .map(|d| std::path::PathBuf::from(d).join("policy-overrides.toml"))
-                .unwrap_or_else(|_| std::path::PathBuf::from("/etc/puck/policy-overrides.toml"))
-        });
+    let overrides_path = config.policy_overrides_path.clone().unwrap_or_else(|| {
+        std::env::var("PUCK_AGENT_CONFIG_DIR")
+            .map(|d| std::path::PathBuf::from(d).join("policy-overrides.toml"))
+            .unwrap_or_else(|_| std::path::PathBuf::from("/etc/puck/policy-overrides.toml"))
+    });
     if overrides_path.exists() {
         if let Err(e) = crate::integrity::enforce_not_writable_by_others(&overrides_path) {
             anyhow::bail!(
