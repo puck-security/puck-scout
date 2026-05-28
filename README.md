@@ -1,8 +1,8 @@
 # Puck
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/puck-security/puck-oss?include_prereleases&sort=semver)](https://github.com/puck-security/puck-oss/releases/latest)
-[![CI](https://github.com/puck-security/puck-oss/actions/workflows/go.yml/badge.svg)](https://github.com/puck-security/puck-oss/actions/workflows/go.yml)
+[![Release](https://img.shields.io/github/v/release/puck-security/puck-scout?include_prereleases&sort=semver)](https://github.com/puck-security/puck-scout/releases/latest)
+[![CI](https://github.com/puck-security/puck-scout/actions/workflows/go.yml/badge.svg)](https://github.com/puck-security/puck-scout/actions/workflows/go.yml)
 
 **Autonomous, read-only endpoint investigation via MCP.**  Ask a question about your fleet in plain English; get a narrative answer with containment recommendations.
 
@@ -63,13 +63,13 @@ Full schemas in [reference.md](docs/reference.md).
 
 ## Quick Start
 
-Install the server, enroll an endpoint, investigate. Download binaries from [GitHub Releases](https://github.com/puck-security/puck-oss/releases/latest).
+Install the server, enroll an endpoint, investigate. Download binaries from [GitHub Releases](https://github.com/puck-security/puck-scout/releases/latest).
 
 **1. Set up the MCP server** (your workstation or an ops box)
 
 ```bash
 # Install puck-mcp onto PATH, then:
-bash <(curl -fsSL https://raw.githubusercontent.com/puck-security/puck-oss/main/scripts/setup-mcp.sh) \
+bash <(curl -fsSL https://raw.githubusercontent.com/puck-security/puck-scout/main/scripts/setup-mcp.sh) \
   --hostname $(hostname)
 ```
 
@@ -89,7 +89,7 @@ puck-mcp generate-bootstrap-token --hostname eng-laptop-47
 # leak-resistant pattern.
 TF=$(mktemp /tmp/puck-bt.XXXXXX) && chmod 600 "$TF"
 printf 'Paste puck-bt-… (hidden): '; read -rs T; echo; printf '%s' "$T" > "$TF"; unset T
-bash <(curl -fsSL https://raw.githubusercontent.com/puck-security/puck-oss/main/scripts/install-agent.sh) \
+bash <(curl -fsSL https://raw.githubusercontent.com/puck-security/puck-scout/main/scripts/install-agent.sh) \
   --server https://your-server:50281 \
   --hostname eng-laptop-47 \
   --token-file "$TF" \
@@ -136,7 +136,7 @@ See [docs/security.md](docs/security.md) for the full threat model.
 ## Project Layout
 
 ```
-puck-oss/
+puck-scout/
   agent/          Rust endpoint agent
   mcp/            Go MCP server
   skills/         Investigation playbooks (YAML)
@@ -147,7 +147,7 @@ puck-oss/
 
 ## Enterprise / Hosted
 
-Puck OSS is the open-source investigation core under the MIT license — free to use, modify, and self-host.  For teams that want more than self-hosted:
+Puck Scout is the open-source investigation core under the MIT license — free to use, modify, and self-host.  For teams that want more than self-hosted:
 
 | | OSS (this repo) | Puck Security (hosted) |
 |---|---|---|
@@ -159,7 +159,7 @@ Puck OSS is the open-source investigation core under the MIT license — free to
 | Investigation runbooks | Self-write | Tabletop-tested, IR-engineer-reviewed |
 | Support | GitHub issues | 24×7 with SLA |
 
-→ **[puck.security/enterprise](https://puck.security/enterprise)** or email <[email protected]>.
+Go to **[puck.security/enterprise](https://puck.security/enterprise)**
 
 ## Documentation
 

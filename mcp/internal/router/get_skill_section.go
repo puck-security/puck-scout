@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/puck-security/puck-oss/mcp/internal/mcp"
+	"github.com/puck-security/puck-scout/mcp/internal/mcp"
 )
 
 // validSkillSections lists the section names puck_get_skill_section

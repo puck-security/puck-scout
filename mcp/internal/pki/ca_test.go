@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -25,10 +26,16 @@ func TestEnsureCA_GeneratesOnFirstCall(t *testing.T) {
 	if ca.PrivKey == nil || ca.PrivKey.Curve != elliptic.P256() {
 		t.Fatalf("expected ECDSA P-256 key, got curve=%v", ca.PrivKey.Curve)
 	}
-	if st, err := os.Stat(keyPath); err != nil {
-		t.Fatalf("stat keyPath: %v", err)
-	} else if st.Mode().Perm() != 0o600 {
-		t.Fatalf("ca-key.pem mode = %o; want 0600", st.Mode().Perm())
+	// Unix mode bits don't apply on Windows (NTFS uses ACLs); os.Stat reports
+	// 0666 there regardless of what OpenFile was called with.  The on-disk
+	// security property still holds via ACL — checking that needs different
+	// machinery and lives outside this test.
+	if runtime.GOOS != "windows" {
+		if st, err := os.Stat(keyPath); err != nil {
+			t.Fatalf("stat keyPath: %v", err)
+		} else if st.Mode().Perm() != 0o600 {
+			t.Fatalf("ca-key.pem mode = %o; want 0600", st.Mode().Perm())
+		}
 	}
 }
 

@@ -168,9 +168,9 @@ func TestToken_ValidateAndSpend_RejectsExpired(t *testing.T) {
 // TestLedger_CorruptLineFailsClosed exercises the corrupt-line backup
 // path added by D2 of the bootstrap review.  A malformed JSONL line in
 // the ledger must:
-//   1. Cause readAll to return an error (fail-closed; refuse to operate)
-//   2. Move the corrupt line to <ledger>.corrupted (preserved for ops)
-//   3. Still return the well-formed records that were already parsed
+//  1. Cause readAll to return an error (fail-closed; refuse to operate)
+//  2. Move the corrupt line to <ledger>.corrupted (preserved for ops)
+//  3. Still return the well-formed records that were already parsed
 //
 // Without this test, a future "just log and skip" regression would
 // silently mask audit-trail corruption.

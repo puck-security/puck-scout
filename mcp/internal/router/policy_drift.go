@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/puck-security/puck-oss/mcp/internal/policy"
+	"github.com/puck-security/puck-scout/mcp/internal/policy"
 )
 
 // agentErrorMessage extracts the rendered error from a CommandResult.Error

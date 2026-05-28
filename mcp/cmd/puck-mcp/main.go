@@ -13,15 +13,15 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/puck-security/puck-oss/mcp/internal/agents"
-	"github.com/puck-security/puck-oss/mcp/internal/audit"
-	"github.com/puck-security/puck-oss/mcp/internal/config"
-	"github.com/puck-security/puck-oss/mcp/internal/investigation"
-	"github.com/puck-security/puck-oss/mcp/internal/pki"
-	"github.com/puck-security/puck-oss/mcp/internal/policy"
-	"github.com/puck-security/puck-oss/mcp/internal/router"
-	"github.com/puck-security/puck-oss/mcp/internal/server"
-	"github.com/puck-security/puck-oss/mcp/internal/skills"
+	"github.com/puck-security/puck-scout/mcp/internal/agents"
+	"github.com/puck-security/puck-scout/mcp/internal/audit"
+	"github.com/puck-security/puck-scout/mcp/internal/config"
+	"github.com/puck-security/puck-scout/mcp/internal/investigation"
+	"github.com/puck-security/puck-scout/mcp/internal/pki"
+	"github.com/puck-security/puck-scout/mcp/internal/policy"
+	"github.com/puck-security/puck-scout/mcp/internal/router"
+	"github.com/puck-security/puck-scout/mcp/internal/server"
+	"github.com/puck-security/puck-scout/mcp/internal/skills"
 )
 
 // Build metadata.  Set at link time via:

@@ -115,7 +115,7 @@ Try one of:
       cd mcp && go build -o puck-mcp ./cmd/puck-mcp/ && sudo install -m 0755 \
         puck-mcp /usr/local/bin/
   - (Future) Download prebuilt binaries from
-      https://github.com/puck-security/puck-oss/releases
+      https://github.com/puck-security/puck-scout/releases
 
 EOF
     exit 6

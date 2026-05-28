@@ -517,7 +517,9 @@ mod decode_tests {
     fn binary_blob_falls_through_to_lossy_utf8() {
         // A blob with some zero bytes but not a UTF-16 stream — heuristic
         // should not trip and we fall back to lossy UTF-8.
-        let bytes: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D];
+        let bytes: Vec<u8> = vec![
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D,
+        ];
         let got = decode_output(&bytes);
         // Just confirm it didn't panic and didn't try UTF-16 decode
         // (PNG headers are not text).
@@ -547,7 +549,10 @@ mod decode_tests {
             "C:/Users/fridg/AppData/Local/Microsoft/Edge/User Data/Default".to_string(),
         ];
         let out = rewrite_powershell_args("powershell", input);
-        assert_eq!(out[3], "'C:/Users/fridg/AppData/Local/Microsoft/Edge/User Data/Default'");
+        assert_eq!(
+            out[3],
+            "'C:/Users/fridg/AppData/Local/Microsoft/Edge/User Data/Default'"
+        );
         // Flags pass through unchanged.
         assert_eq!(out[0], "-NoProfile");
         assert_eq!(out[1], "-Command");

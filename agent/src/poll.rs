@@ -185,8 +185,7 @@ pub async fn run(config: AgentConfig) -> Result<()> {
         // ----------------------------------------------------------------
         // Phase 1: drain any commands that accumulated while SSE was down.
         // ----------------------------------------------------------------
-        if let Err(e) =
-            drain_on_connect(&client, &poll_url, &results_url, &config, &agent_id).await
+        if let Err(e) = drain_on_connect(&client, &poll_url, &results_url, &config, &agent_id).await
         {
             warn!(error = %format!("{:#}", e), "drain-on-connect failed; will retry");
             backoff_secs = next_backoff(backoff_secs);
@@ -229,7 +228,10 @@ async fn drain_on_connect(
 ) -> Result<()> {
     match poll_for_commands(client, poll_url).await? {
         Some(commands) => {
-            info!(count = commands.len(), "drain-on-connect: executing pending commands");
+            info!(
+                count = commands.len(),
+                "drain-on-connect: executing pending commands"
+            );
             execute_and_submit(client, results_url, config, agent_id, commands).await
         }
         None => {
@@ -534,8 +536,8 @@ mod tests {
 
     #[test]
     fn sse_buffer_over_limit_fails() {
-        let err = check_sse_buffer_size(SSE_BUFFER_MAX_BYTES + 1)
-            .expect_err("over-limit must fail");
+        let err =
+            check_sse_buffer_size(SSE_BUFFER_MAX_BYTES + 1).expect_err("over-limit must fail");
         let msg = err.to_string();
         assert!(
             msg.contains("exceeded") && msg.contains("event terminator"),
@@ -597,7 +599,10 @@ mod tests {
         buf.extend_from_slice(&bytes[..mid]);
         // Old code would have str::from_utf8'd here and FAILED.
         // New code keeps it as bytes until the event boundary.
-        assert!(std::str::from_utf8(&buf).is_err(), "mid-char split must be invalid as partial");
+        assert!(
+            std::str::from_utf8(&buf).is_err(),
+            "mid-char split must be invalid as partial"
+        );
         buf.extend_from_slice(&bytes[mid..]);
         buf.extend_from_slice(b"\n\n");
         let pos = find_event_terminator(&buf).expect("terminator");

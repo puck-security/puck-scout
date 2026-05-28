@@ -132,8 +132,7 @@ pub async fn renew_cert(
     let on_disk_ca = std::fs::read_to_string(ca_path)
         .with_context(|| format!("read on-disk CA at {}", ca_path.display()))?;
     let on_disk_fp = ca_fingerprint(&on_disk_ca).context("fingerprint on-disk CA")?;
-    let returned_fp =
-        ca_fingerprint(&parsed.ca_cert_pem).context("fingerprint returned CA")?;
+    let returned_fp = ca_fingerprint(&parsed.ca_cert_pem).context("fingerprint returned CA")?;
     if on_disk_fp != returned_fp {
         return Err(anyhow!(
             "renewal refused: returned CA fingerprint sha256:{returned_fp} does not match \
@@ -290,7 +289,10 @@ mod tests {
         let a_fp2 = ca_fingerprint(&a_pem).unwrap();
         let b_fp = ca_fingerprint(&b_pem).unwrap();
         assert_eq!(a_fp1, a_fp2, "fingerprint must be deterministic");
-        assert_ne!(a_fp1, b_fp, "different certs must produce different fingerprints");
+        assert_ne!(
+            a_fp1, b_fp,
+            "different certs must produce different fingerprints"
+        );
         assert_eq!(a_fp1.len(), 64, "sha256 hex digest is 64 chars");
     }
 

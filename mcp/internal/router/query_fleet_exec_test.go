@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/puck-security/puck-oss/mcp/internal/agents"
-	"github.com/puck-security/puck-oss/mcp/internal/audit"
+	"github.com/puck-security/puck-scout/mcp/internal/agents"
+	"github.com/puck-security/puck-scout/mcp/internal/audit"
 )
 
 // TestQueryFleet_HappyPath_DedupsHomogeneousFleet — three hosts, same

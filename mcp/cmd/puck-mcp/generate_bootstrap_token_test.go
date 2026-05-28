@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/puck-security/puck-oss/mcp/internal/pki"
+	"github.com/puck-security/puck-scout/mcp/internal/pki"
 )
 
 // fixtureConfig builds a minimal puck-mcp install directory with a real CA
@@ -32,15 +32,17 @@ func fixtureConfig(t *testing.T) string {
 		t.Fatalf("rand: %v", err)
 	}
 
+	// Single-quoted YAML strings: no backslash escape processing, so Windows
+	// paths like `C:\Users\…` don't get mis-parsed as `\U` Unicode escapes.
 	yamlBody := []byte(
 		`mcp_listen:   "127.0.0.1:0"
 agent_listen: "127.0.0.1:0"
 mcp_token:    "` + hex.EncodeToString(tokBuf) + `"
-ca_cert_path:       "` + caPath + `"
-ca_key_path:        "` + caKeyPath + `"
-server_cert_path:   "` + filepath.Join(dir, "server.pem") + `"
-server_key_path:    "` + filepath.Join(dir, "server-key.pem") + `"
-bootstrap_token_dir: "` + dir + `"
+ca_cert_path:       '` + caPath + `'
+ca_key_path:        '` + caKeyPath + `'
+server_cert_path:   '` + filepath.Join(dir, "server.pem") + `'
+server_key_path:    '` + filepath.Join(dir, "server-key.pem") + `'
+bootstrap_token_dir: '` + dir + `'
 `)
 	cfgPath := filepath.Join(dir, "puck-mcp.yaml")
 	if err := os.WriteFile(cfgPath, yamlBody, 0o600); err != nil {

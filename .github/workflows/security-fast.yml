@@ -40,9 +40,19 @@ jobs:
           fetch-depth: 0   # gitleaks scans full history; shallow clone misses old leaks
       - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32  # v5.0.2
         with:
-          go-version: '1.22'
+          go-version: '1.25.10'
       - name: Install gitleaks
-        run: go install github.com/gitleaks/gitleaks/v8@v8.18.4
+        # Binary release — avoids the `go install` path issue where older
+        # tags still declare `github.com/zricethezav/gitleaks/v8` as the
+        # module name even after the repo transferred to the gitleaks org.
+        # TODO: add SHA256 pin to the tarball once a release is chosen and
+        # the hash is verified out-of-band.
+        run: |
+          GITLEAKS_VERSION=8.24.2
+          curl -fsSL -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo install /tmp/gitleaks /usr/local/bin/
       - name: Scan
         run: gitleaks detect --redact --no-banner --exit-code 1
 
@@ -53,7 +63,7 @@ jobs:
       - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
       - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32  # v5.0.2
         with:
-          go-version: '1.22'
+          go-version: '1.25.10'
       - name: Install actionlint
         run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.4
       - name: Lint workflows
@@ -71,7 +81,15 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install semgrep
-        run: pip install semgrep==1.85.0
+        # setuptools (provides pkg_resources) is no longer installed by
+        # default in Python 3.12.  semgrep 1.85.0 transitively imports
+        # opentelemetry-instrumentation, which still does
+        # `from pkg_resources import ...` — and setuptools >= 81 stopped
+        # vendoring pkg_resources.  Pin to a setuptools that still ships
+        # it so semgrep can boot.
+        run: |
+          pip install 'setuptools<81'
+          pip install semgrep==1.85.0
       - name: Scan
         # --error: non-zero exit on findings (gate the merge)
         # --metrics=off: don't phone home with usage stats

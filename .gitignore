@@ -27,6 +27,8 @@ mcp-bin/
 *~
 .DS_Store
 Thumbs.db
+# macOS Finder/SMB temp lock files
+.!*
 
 # ─── Environment / local config ───────────────────────────────────────
 .env

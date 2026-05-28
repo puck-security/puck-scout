@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/puck-security/puck-oss/mcp/internal/investigation"
-	"github.com/puck-security/puck-oss/mcp/internal/skills"
+	"github.com/puck-security/puck-scout/mcp/internal/investigation"
+	"github.com/puck-security/puck-scout/mcp/internal/skills"
 )
 
 func newSkillSectionRouter(t *testing.T) *Router {

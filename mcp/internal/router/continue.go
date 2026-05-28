@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/puck-security/puck-oss/mcp/internal/mcp"
+	"github.com/puck-security/puck-scout/mcp/internal/mcp"
 )
 
 const maxAdditionalCommands = 1000

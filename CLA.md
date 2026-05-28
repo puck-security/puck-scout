@@ -7,7 +7,7 @@ distribute and sublicense your contribution as part of the project — while
 making clear that **you retain copyright in your contribution.**
 
 This CLA is adapted from the Apache Software Foundation's well-known
-Individual and Corporate CLA templates (v2.2), which are used by hundreds
+Individual and Corporate CLA templates (v2.0), which are used by hundreds
 of commercial-OSS projects.  We did not invent novel terms; if you have
 signed an Apache-style CLA before, this will look familiar.
 
@@ -220,9 +220,7 @@ the work as "Submitted on behalf of a third-party: [named here]".
 ### Schedule A — designated employees and Point of Contact
 
 For Corporate signers: list authorised employees and the Corporation's
-Point of Contact in the signature comment on your first PR, or email
-<[email protected]> with the list.  Updates to the list use the same
-channels.
+Point of Contact in the signature comment on your first PR or contact us with the list.  Updates to the list use the same channels.
 
 ---
 
@@ -238,5 +236,3 @@ account.  Your signature is recorded with your GitHub username + the
 commit SHA you signed against, and stored in
 [`signatures/version1/cla.json`](signatures/version1/cla.json) for
 auditability.
-
-Questions: <[email protected]>.

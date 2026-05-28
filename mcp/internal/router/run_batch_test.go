@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/puck-security/puck-oss/mcp/internal/config"
-	"github.com/puck-security/puck-oss/mcp/internal/investigation"
+	"github.com/puck-security/puck-scout/mcp/internal/config"
+	"github.com/puck-security/puck-scout/mcp/internal/investigation"
 )
 
 // newBatchRouter builds a Router with just enough wired up to exercise

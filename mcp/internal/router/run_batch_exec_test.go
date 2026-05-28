@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/puck-security/puck-oss/mcp/internal/audit"
+	"github.com/puck-security/puck-scout/mcp/internal/audit"
 )
 
 // TestRunBatch_HappyPath_DispatchesAndCollectsResults — end-to-end via

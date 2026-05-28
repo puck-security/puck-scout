@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/puck-security/puck-oss/mcp/internal/agents"
+	"github.com/puck-security/puck-scout/mcp/internal/agents"
 )
 
 func testServer(t *testing.T) (*AgentServer, *agents.Registry, *agents.Queue) {

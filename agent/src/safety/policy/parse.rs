@@ -58,12 +58,12 @@ pub fn parse_args(p: &BinaryPolicy, args: &[String]) -> Result<ParsedArgs, Polic
                         i += 1;
                     }
                     true => {
-                        let val = args.get(i + 1).ok_or_else(|| {
-                            PolicyError::MissingFlagValue {
+                        let val = args
+                            .get(i + 1)
+                            .ok_or_else(|| PolicyError::MissingFlagValue {
                                 binary: p.name.clone(),
                                 flag: tok.clone(),
-                            }
-                        })?;
+                            })?;
                         validate_value(p, spec, val)?;
                         flags.push((tok.clone(), Some(val.clone())));
                         i += 2;

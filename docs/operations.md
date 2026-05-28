@@ -108,7 +108,7 @@ for h in $HOSTS; do
       "PUCK_BOOTSTRAP_TOKEN='$TOKEN' bash -s -- \
        --server https://<mcp-host>:50281 --hostname '$h' \
        --server-ca-fingerprint '$NEW_FP'" \
-      < <(curl -fsSL https://raw.githubusercontent.com/puck-security/puck-oss/main/scripts/install-agent.sh)
+      < <(curl -fsSL https://raw.githubusercontent.com/puck-security/puck-scout/main/scripts/install-agent.sh)
 done
 
 # 4. (Optional) parallelise with xargs:

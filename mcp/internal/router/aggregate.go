@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/puck-security/puck-oss/mcp/internal/parsers"
+	"github.com/puck-security/puck-scout/mcp/internal/parsers"
 )
 
 // resultGroup is a set of hosts whose command produced identical output.

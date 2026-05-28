@@ -1,4 +1,4 @@
-# CLAUDE.md — Puck OSS
+# CLAUDE.md — Puck Scout
 
 ## 1. What Puck Is
 
@@ -23,7 +23,7 @@ These are load-bearing constraints. If you are about to do something that violat
 ## 3. Repository Structure
 
 ```
-puck-oss/
+puck-scout/
   agent/          Rust endpoint agent. See agent/CLAUDE.md.
   mcp/            Go MCP server. See mcp/CLAUDE.md.
   skills/         Investigation playbooks (YAML + markdown). See skills/CLAUDE.md.

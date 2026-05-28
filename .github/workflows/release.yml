@@ -204,9 +204,10 @@ jobs:
           VERSION_RAW="${GITHUB_REF_NAME#v}"
           IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION_RAW"
           MAJOR=${MAJOR:-0}; MINOR=${MINOR:-0}; PATCH=${PATCH:-0}
-          ARM_FLAG=$([ "${{ matrix.goarch }}" = "arm64" ] && echo "-arm" || echo "")
+          ARGS=(-64)
+          [ "${{ matrix.goarch }}" = "arm64" ] && ARGS+=(-arm)
           goversioninfo \
-            -64 $ARM_FLAG \
+            "${ARGS[@]}" \
             -ver-major="$MAJOR" -ver-minor="$MINOR" -ver-patch="$PATCH" \
             -product-ver-major="$MAJOR" -product-ver-minor="$MINOR" -product-ver-patch="$PATCH" \
             -file-version="${VERSION_RAW:-0.0.0}" \
@@ -261,7 +262,7 @@ jobs:
           merge-multiple: true
 
       - name: Package skills
-        run: tar -czf dist/puck-oss-skills.tar.gz -C skills .
+        run: tar -czf dist/puck-scout-skills.tar.gz -C skills .
 
       - name: Bundle install scripts
         run: |
@@ -273,7 +274,7 @@ jobs:
       # to anyone auditing what code went into the binaries.
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.25.10'
       - name: Install syft
         # Pinned version closes the supply-chain gap of an auto-updating
         # action installer.  Single Go binary via the module proxy.
@@ -286,7 +287,7 @@ jobs:
       - name: Checksums
         run: |
           cd dist
-          sha256sum puck-agent-* puck-mcp-* puck-oss-skills.tar.gz *.sbom.spdx.json | tee SHA256SUMS
+          sha256sum ./puck-agent-* ./puck-mcp-* ./puck-scout-skills.tar.gz ./*.sbom.spdx.json | tee SHA256SUMS
 
       # Keyless cosign signing via GitHub OIDC.  No long-lived key
       # material — the signature includes the certificate that bound
@@ -297,7 +298,7 @@ jobs:
       #
       #   cosign verify-blob \
       #       --certificate-identity-regexp \
-      #         "https://github.com/puck-security/puck-oss/.github/workflows/release.yml@.*" \
+      #         "https://github.com/puck-security/puck-scout/.github/workflows/release.yml@.*" \
       #       --certificate-oidc-issuer https://token.actions.githubusercontent.com \
       #       --signature <file>.sig --certificate <file>.cert \
       #       <file>
@@ -310,7 +311,7 @@ jobs:
         # SHA256SUMS itself is still signed below as a one-stop manifest.
         run: |
           set -euo pipefail
-          for f in puck-agent-* puck-mcp-* puck-oss-skills.tar.gz *.sbom.spdx.json; do
+          for f in puck-agent-* puck-mcp-* puck-scout-skills.tar.gz *.sbom.spdx.json; do
             [ -f "$f" ] || continue
             case "$f" in *.sig|*.cert) continue;; esac
             cosign sign-blob --yes \
@@ -335,7 +336,7 @@ jobs:
         working-directory: dist
         run: |
           set -euo pipefail
-          hashes=$(sha256sum puck-agent-* puck-mcp-* puck-oss-skills.tar.gz *.sbom.spdx.json | base64 -w0)
+          hashes=$(sha256sum ./puck-agent-* ./puck-mcp-* ./puck-scout-skills.tar.gz ./*.sbom.spdx.json | base64 -w0)
           echo "hashes=$hashes" >> "$GITHUB_OUTPUT"
 
       - name: Release
@@ -344,7 +345,7 @@ jobs:
           files: |
             dist/puck-agent-*
             dist/puck-mcp-*
-            dist/puck-oss-skills.tar.gz
+            dist/puck-scout-skills.tar.gz
             dist/install-agent.sh
             dist/setup-mcp.sh
             dist/*.sbom.spdx.json
@@ -361,7 +362,7 @@ jobs:
   #
   #   slsa-verifier verify-artifact \
   #     --provenance-path multiple.intoto.jsonl \
-  #     --source-uri github.com/puck-security/puck-oss \
+  #     --source-uri github.com/puck-security/puck-scout \
   #     --source-tag v0.3.0 \
   #     puck-agent-linux-amd64
   #

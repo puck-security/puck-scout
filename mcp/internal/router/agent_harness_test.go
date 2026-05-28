@@ -4,7 +4,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/puck-security/puck-oss/mcp/internal/agents"
+	"github.com/puck-security/puck-scout/mcp/internal/agents"
 )
 
 // mockAgent simulates an endpoint agent for integration testing.  It

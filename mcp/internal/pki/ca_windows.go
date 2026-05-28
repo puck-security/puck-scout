@@ -10,3 +10,11 @@ package pki
 func checkParentDir(_ string) error {
 	return nil
 }
+
+// enforceMode0600 is a no-op on Windows for the same reason: os.Stat reports
+// 0666 regardless of the actual ACL.  The owner-only invariant still holds
+// via the ACL inherited from the parent dir; a meaningful check would need
+// SDDL inspection via golang.org/x/sys/windows.
+func enforceMode0600(_ string) error {
+	return nil
+}

@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/puck-security/puck-oss/mcp/internal/agents"
-	"github.com/puck-security/puck-oss/mcp/internal/audit"
-	"github.com/puck-security/puck-oss/mcp/internal/investigation"
-	"github.com/puck-security/puck-oss/mcp/internal/mcp"
+	"github.com/puck-security/puck-scout/mcp/internal/agents"
+	"github.com/puck-security/puck-scout/mcp/internal/audit"
+	"github.com/puck-security/puck-scout/mcp/internal/investigation"
+	"github.com/puck-security/puck-scout/mcp/internal/mcp"
 )
 
 var reFleetHostname = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,251}$`)

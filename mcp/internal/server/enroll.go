@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/puck-security/puck-oss/mcp/internal/audit"
-	"github.com/puck-security/puck-oss/mcp/internal/pki"
+	"github.com/puck-security/puck-scout/mcp/internal/audit"
+	"github.com/puck-security/puck-scout/mcp/internal/pki"
 )
 
 type enrollRequest struct {

@@ -2,7 +2,7 @@
 # install-agent.sh --install puck-agent on this endpoint via mTLS enrollment.
 #
 # Usage:
-#   curl -fsSL https://github.com/puck-security/puck-oss/releases/.../install-agent.sh | \
+#   curl -fsSL https://github.com/puck-security/puck-scout/releases/.../install-agent.sh | \
 #     bash -s -- --server https://puck-mcp.internal:50281 \
 #                --hostname $(hostname) \
 #                --token-file /path/to/bootstrap-token
@@ -174,7 +174,7 @@ case "$_OS" in
     *) ;;
 esac
 _BINARY_NAME="puck-agent-${_OS}-${_ARCH}"
-_RELEASE_BASE="https://github.com/puck-security/puck-oss/releases/latest/download"
+_RELEASE_BASE="https://github.com/puck-security/puck-scout/releases/latest/download"
 _BINARY_URL="$_RELEASE_BASE/$_BINARY_NAME"
 _SUMS_URL="$_RELEASE_BASE/SHA256SUMS"
 
@@ -229,8 +229,8 @@ ERROR: could not download $_BINARY_NAME from:
   $_BINARY_URL
 
 No pre-built release binary is available yet for $_ARCH/$_OS. Build from source:
-  git clone https://github.com/puck-security/puck-oss
-  cd puck-oss/agent && cargo build --release
+  git clone https://github.com/puck-security/puck-scout
+  cd puck-scout/agent && cargo build --release
   sudo install -m 0755 target/release/puck-agent /usr/local/bin/
 Then re-run this script.
 DOWNLOAD_EOF
@@ -247,11 +247,11 @@ Options:
       bash install-agent.sh --download-binary [other args]
   - Set PUCK_AGENT_BIN to the absolute path of puck-agent.
   - Build from source:
-      git clone https://github.com/puck-security/puck-oss
-      cd puck-oss/agent && cargo build --release
+      git clone https://github.com/puck-security/puck-scout
+      cd puck-scout/agent && cargo build --release
       sudo install -m 0755 target/release/puck-agent /usr/local/bin/
   - (Future) Download prebuilt binaries from
-      https://github.com/puck-security/puck-oss/releases
+      https://github.com/puck-security/puck-scout/releases
 
 EOF
     exit 6

@@ -1,8 +1,8 @@
 package router
 
 import (
-	"github.com/puck-security/puck-oss/mcp/internal/audit"
-	"github.com/puck-security/puck-oss/mcp/internal/policy"
+	"github.com/puck-security/puck-scout/mcp/internal/audit"
+	"github.com/puck-security/puck-scout/mcp/internal/policy"
 )
 
 // enforcePolicy validates the command against the typed allowlist (the

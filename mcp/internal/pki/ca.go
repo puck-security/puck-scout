@@ -54,12 +54,12 @@ func EnsureCA(certPath, keyPath string) (*CA, error) {
 		return nil, fmt.Errorf(
 			"CA half-state: %s exists but %s is missing. "+
 				"To recover: delete %s (this orphans every issued agent cert; agents must re-enroll) "+
-				"and restart puck-mcp to regenerate the CA.", keyPath, certPath, keyPath)
+				"and restart puck-mcp to regenerate the CA", keyPath, certPath, keyPath)
 	case !keyExists && certExists:
 		return nil, fmt.Errorf(
 			"CA half-state: %s exists but %s is missing. "+
 				"To recover: delete %s and restart puck-mcp to regenerate the CA "+
-				"(this orphans every issued agent cert; agents must re-enroll).",
+				"(this orphans every issued agent cert; agents must re-enroll)",
 			certPath, keyPath, certPath)
 	default:
 		return generateCA(certPath, keyPath)
@@ -158,17 +158,6 @@ func writePEM(path, blockType string, der []byte, mode os.FileMode) error {
 		return err
 	}
 	return os.Rename(tmp, path)
-}
-
-func enforceMode0600(path string) error {
-	st, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
-	if st.Mode().Perm()&0o077 != 0 {
-		return fmt.Errorf("%w: %s mode %o", ErrCAKeyLoosePerms, path, st.Mode().Perm())
-	}
-	return nil
 }
 
 // checkParentDir validates that the directory holding the CA private key has

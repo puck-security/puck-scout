@@ -8,6 +8,17 @@ import (
 	"syscall"
 )
 
+func enforceMode0600(path string) error {
+	st, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if st.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("%w: %s mode %o", ErrCAKeyLoosePerms, path, st.Mode().Perm())
+	}
+	return nil
+}
+
 func checkParentDir(dir string) error {
 	st, err := os.Stat(dir)
 	if err != nil {

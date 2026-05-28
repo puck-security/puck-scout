@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/puck-security/puck-oss/mcp/internal/agents"
+	"github.com/puck-security/puck-scout/mcp/internal/agents"
 )
 
 // containedPath verifies that dest is inside baseDir after path normalization,

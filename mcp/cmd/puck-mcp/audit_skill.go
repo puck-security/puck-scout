@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/puck-security/puck-oss/mcp/internal/policy"
-	"github.com/puck-security/puck-oss/mcp/internal/skills"
+	"github.com/puck-security/puck-scout/mcp/internal/policy"
+	"github.com/puck-security/puck-scout/mcp/internal/skills"
 )
 
 // runAuditSkill scans a skill's guidance prose for mentions of policy-known
@@ -175,8 +175,8 @@ func auditSkillProse(skill *skills.Skill) []string {
 // mentionedInProse reports whether `binary` appears in `prose` as an
 // actual command invocation rather than the English word of the same
 // spelling.  Two high-precision contexts:
-//   1. Inside backticks (`find -name foo`)               — the skill-authoring convention
-//   2. After a shell-prompt prefix ("$ find ", "# find ") — code-block sentinel
+//  1. Inside backticks (`find -name foo`)               — the skill-authoring convention
+//  2. After a shell-prompt prefix ("$ find ", "# find ") — code-block sentinel
 //
 // A previous version also matched "binary as first word of a line", but
 // that fired on common English-leading-word constructions ("where you

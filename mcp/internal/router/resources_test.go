@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/puck-security/puck-oss/mcp/internal/skills"
+	"github.com/puck-security/puck-scout/mcp/internal/skills"
 )
 
 func resourceRouter(t *testing.T) *Router {

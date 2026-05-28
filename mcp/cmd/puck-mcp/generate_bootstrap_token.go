@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/puck-security/puck-oss/mcp/internal/config"
-	"github.com/puck-security/puck-oss/mcp/internal/pki"
-	"github.com/puck-security/puck-oss/mcp/internal/server"
+	"github.com/puck-security/puck-scout/mcp/internal/config"
+	"github.com/puck-security/puck-scout/mcp/internal/pki"
+	"github.com/puck-security/puck-scout/mcp/internal/server"
 )
 
 // caFingerprintPin reads the CA cert at path, parses the first PEM block,
@@ -176,7 +176,7 @@ func printInstallBlock(hostname string, tok *pki.BootstrapToken, serverURL, caFp
 
 		fmt.Println("Linux/macOS — paste into any terminal:")
 		fmt.Printf(
-			"  curl -fsSL https://raw.githubusercontent.com/puck-security/puck-oss/main/scripts/install-agent.sh"+
+			"  curl -fsSL https://raw.githubusercontent.com/puck-security/puck-scout/main/scripts/install-agent.sh"+
 				" | PUCK_BOOTSTRAP_TOKEN='%s' bash -s --"+
 				" --server %s --hostname %s"+
 				" --server-ca-fingerprint %s"+
@@ -200,7 +200,7 @@ func printInstallBlock(hostname string, tok *pki.BootstrapToken, serverURL, caFp
 				"  $d=\"$env:USERPROFILE\\.config\\puck-agent\"\n"+
 				"  New-Item -Force -ItemType Directory $d | Out-Null\n"+
 				"  $a = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'amd64' }\n"+
-				"  $base = 'https://github.com/puck-security/puck-oss/releases/latest/download'\n"+
+				"  $base = 'https://github.com/puck-security/puck-scout/releases/latest/download'\n"+
 				"  Invoke-WebRequest -UseBasicParsing -Uri \"$base/puck-agent-windows-$a.exe\" -OutFile \"$d\\puck-agent.exe\"\n"+
 				"  # Verify SHA256 against the published SHA256SUMS — refuse to run a tampered binary.\n"+
 				"  $sumsTmp = New-TemporaryFile\n"+
@@ -226,7 +226,7 @@ func printInstallBlock(hostname string, tok *pki.BootstrapToken, serverURL, caFp
 				"  Write-Host '           Status:          Get-ScheduledTask -TaskName puck-agent | Get-ScheduledTaskInfo'\n"+
 				"  Write-Host '           Stop:            Stop-ScheduledTask    -TaskName puck-agent'\n"+
 				"  Write-Host \"           Remove:          Unregister-ScheduledTask -TaskName puck-agent -Confirm:`$false\"\n"+
-				"  Write-Host \"           Full uninstall:  irm https://raw.githubusercontent.com/puck-security/puck-oss/main/scripts/uninstall.ps1 | iex\"\n",
+				"  Write-Host \"           Full uninstall:  irm https://raw.githubusercontent.com/puck-security/puck-scout/main/scripts/uninstall.ps1 | iex\"\n",
 			tok.Plaintext, serverURL, hostname, caFp)
 		return nil
 	}

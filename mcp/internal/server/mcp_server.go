@@ -10,8 +10,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/puck-security/puck-oss/mcp/internal/mcp"
-	"github.com/puck-security/puck-oss/mcp/internal/router"
+	"github.com/puck-security/puck-scout/mcp/internal/mcp"
+	"github.com/puck-security/puck-scout/mcp/internal/router"
 )
 
 const mcpMessageMaxBytes = 1 << 20 // 1 MB — sufficient for any JSON-RPC tool call
