@@ -59,13 +59,15 @@ func rotateTestEnv(t *testing.T, initialSANs []string) (string, *config.Config) 
 	// A minimal valid puck-mcp.yaml. mcp_token is required by
 	// ValidateTransportAuth so config.Load() succeeds.
 	cfgPath := filepath.Join(dir, "puck-mcp.yaml")
+	// Single-quoted YAML for filesystem paths — Windows paths like `C:\Users\…`
+	// would otherwise be mis-parsed as `\U` Unicode escapes.
 	yamlBody := fmt.Sprintf(`# puck-mcp config (test fixture)
 mcp_token: "%s"
-ca_cert_path:     "%s"
-ca_key_path:      "%s"
-server_cert_path: "%s"
-server_key_path:  "%s"
-bootstrap_token_dir: "%s"
+ca_cert_path:     '%s'
+ca_key_path:      '%s'
+server_cert_path: '%s'
+server_key_path:  '%s'
+bootstrap_token_dir: '%s'
 server_cert_sans:
 %s
 `,
