@@ -159,7 +159,7 @@ Puck OSS is the open-source investigation core under the MIT license — free to
 | Investigation runbooks | Self-write | Tabletop-tested, IR-engineer-reviewed |
 | Support | GitHub issues | 24×7 with SLA |
 
-→ **[puck.security/enterprise](https://puck.security/enterprise)** or email <[email protected]>.
+Go to **[puck.security/enterprise](https://puck.security/enterprise)**
 
 ## Documentation
 
