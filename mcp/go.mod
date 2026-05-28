@@ -2,6 +2,8 @@ module github.com/puck-security/puck-scout/mcp
 
 go 1.24.0
 
+toolchain go1.25.10
+
 require (
 	github.com/BurntSushi/toml v1.3.2
 	github.com/gofrs/flock v0.13.0

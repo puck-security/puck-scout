@@ -274,7 +274,7 @@ jobs:
       # to anyone auditing what code went into the binaries.
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.25.10'
       - name: Install syft
         # Pinned version closes the supply-chain gap of an auto-updating
         # action installer.  Single Go binary via the module proxy.
