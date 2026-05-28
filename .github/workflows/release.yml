@@ -272,13 +272,18 @@ jobs:
       # SBOMs for transparency — one per component, scanned from source
       # (Cargo.lock + go.sum) so transitive deps are captured.  Useful
       # to anyone auditing what code went into the binaries.
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.25.10'
       - name: Install syft
-        # Pinned version closes the supply-chain gap of an auto-updating
-        # action installer.  Single Go binary via the module proxy.
-        run: go install github.com/anchore/syft/cmd/syft@v1.13.0
+        # Binary release — `go install` rejects syft because its go.mod
+        # has replace directives.  Pinned version still gives us the
+        # supply-chain reproducibility goal of the original `go install`.
+        # TODO: add SHA256 pin once a release is chosen and the hash is
+        # verified out-of-band.
+        run: |
+          SYFT_VERSION=1.13.0
+          curl -fsSL -o /tmp/syft.tar.gz \
+            "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz"
+          tar -xzf /tmp/syft.tar.gz -C /tmp syft
+          sudo install /tmp/syft /usr/local/bin/
       - name: Generate SBOMs (one per component, SPDX JSON)
         run: |
           syft scan dir:agent -o spdx-json=dist/puck-agent.sbom.spdx.json
