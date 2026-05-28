@@ -1,6 +1,7 @@
 package investigation
 
 import (
+	"path/filepath"
 	"testing"
 )
 
@@ -30,7 +31,8 @@ func TestCreateAndGet(t *testing.T) {
 	if inv.MaxCommands != 100 {
 		t.Errorf("MaxCommands = %d, want 100", inv.MaxCommands)
 	}
-	expectedDir := "/tmp/investigations/" + inv.ID
+	// filepath.Join so the expected matches the OS separator on Windows.
+	expectedDir := filepath.Join("/tmp/investigations", inv.ID)
 	if inv.Dir != expectedDir {
 		t.Errorf("Dir = %q, want %q", inv.Dir, expectedDir)
 	}
