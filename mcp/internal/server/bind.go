@@ -81,6 +81,7 @@ func whoOwnsPort(port string) string {
 }
 
 func suggestFreePort() int {
+	// nosemgrep: go.lang.security.audit.net.bind_all.avoid-bind-to-all-interfaces -- transient socket on :0 to query the kernel for a free ephemeral port, closed immediately.
 	lst, err := net.Listen("tcp", ":0")
 	if err != nil {
 		return 0

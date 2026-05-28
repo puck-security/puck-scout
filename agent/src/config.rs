@@ -147,6 +147,7 @@ mod tests {
     // (no /tmp).  Single-quoted YAML scalars: no backslash escape so
     // Windows paths pass through cleanly.
     fn min_yaml() -> String {
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir -- test fixture; not a security boundary.
         let tmp = std::env::temp_dir();
         format!(
             "\nmcp_server: \"https://localhost:8081\"\nhostname: \"testhost\"\ntls_cert_path: '{0}'\ntls_key_path:  '{1}'\ntls_ca_path:   '{2}'\n",
