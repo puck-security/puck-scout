@@ -160,17 +160,6 @@ func writePEM(path, blockType string, der []byte, mode os.FileMode) error {
 	return os.Rename(tmp, path)
 }
 
-func enforceMode0600(path string) error {
-	st, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
-	if st.Mode().Perm()&0o077 != 0 {
-		return fmt.Errorf("%w: %s mode %o", ErrCAKeyLoosePerms, path, st.Mode().Perm())
-	}
-	return nil
-}
-
 // checkParentDir validates that the directory holding the CA private key has
 // safe ownership.  Implementation is split per-OS:
 //
