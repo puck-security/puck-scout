@@ -157,9 +157,10 @@ func checkInstanceLock() checkResult {
 	} else if err != nil {
 		return checkResult{"instance lock", false, "cannot stat pidfile: " + err.Error()}
 	}
-	// Try to acquire the lock non-blocking.  If we get it, no one else holds
-	// the file lock; if we don't, the daemon (or another process) does.
-	lk := flock.New(pidfile)
+	// Try to acquire the sidecar lock non-blocking.  If we get it, no one
+	// else holds the file lock; if we don't, the daemon (or another process)
+	// does.  Lock path must match AcquireInstanceLock's `<pidfile>.lock`.
+	lk := flock.New(pidfile + ".lock")
 	locked, err := lk.TryLock()
 	if err != nil {
 		return checkResult{"instance lock", false, "cannot probe lock: " + err.Error()}
