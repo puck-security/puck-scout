@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/puck-security/puck-oss/mcp/internal/pki"
+	"github.com/puck-security/puck-scout/mcp/internal/pki"
 )
 
 func TestRenewCert_HappyPath(t *testing.T) {

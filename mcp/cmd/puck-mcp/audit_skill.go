@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/puck-security/puck-oss/mcp/internal/policy"
-	"github.com/puck-security/puck-oss/mcp/internal/skills"
+	"github.com/puck-security/puck-scout/mcp/internal/policy"
+	"github.com/puck-security/puck-scout/mcp/internal/skills"
 )
 
 // runAuditSkill scans a skill's guidance prose for mentions of policy-known

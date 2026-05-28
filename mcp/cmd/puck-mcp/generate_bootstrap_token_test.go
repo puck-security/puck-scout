@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/puck-security/puck-oss/mcp/internal/pki"
+	"github.com/puck-security/puck-scout/mcp/internal/pki"
 )
 
 // fixtureConfig builds a minimal puck-mcp install directory with a real CA

@@ -12,10 +12,10 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
-	"github.com/puck-security/puck-oss/mcp/internal/config"
-	"github.com/puck-security/puck-oss/mcp/internal/pki"
-	"github.com/puck-security/puck-oss/mcp/internal/policy"
-	"github.com/puck-security/puck-oss/mcp/internal/skills"
+	"github.com/puck-security/puck-scout/mcp/internal/config"
+	"github.com/puck-security/puck-scout/mcp/internal/pki"
+	"github.com/puck-security/puck-scout/mcp/internal/policy"
+	"github.com/puck-security/puck-scout/mcp/internal/skills"
 )
 
 type checkResult struct {

@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/puck-security/puck-oss/mcp/internal/pki"
+	"github.com/puck-security/puck-scout/mcp/internal/pki"
 )
 
 func newEnrollFixture(t *testing.T) (*EnrollHandler, string) {

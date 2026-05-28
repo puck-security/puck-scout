@@ -8,10 +8,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/puck-security/puck-oss/mcp/internal/agents"
-	"github.com/puck-security/puck-oss/mcp/internal/audit"
-	"github.com/puck-security/puck-oss/mcp/internal/pki"
-	"github.com/puck-security/puck-oss/mcp/internal/policy"
+	"github.com/puck-security/puck-scout/mcp/internal/agents"
+	"github.com/puck-security/puck-scout/mcp/internal/audit"
+	"github.com/puck-security/puck-scout/mcp/internal/pki"
+	"github.com/puck-security/puck-scout/mcp/internal/policy"
 )
 
 // BuildInfo is set at startup by main.go from -ldflags-injected

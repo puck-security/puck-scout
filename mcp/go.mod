@@ -1,4 +1,4 @@
-module github.com/puck-security/puck-oss/mcp
+module github.com/puck-security/puck-scout/mcp
 
 go 1.24.0
 

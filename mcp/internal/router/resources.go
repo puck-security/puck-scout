@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/puck-security/puck-oss/mcp/internal/mcp"
+	"github.com/puck-security/puck-scout/mcp/internal/mcp"
 )
 
 // SkillResourceScheme is the URI scheme puck-mcp uses for skill

@@ -7,11 +7,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/puck-security/puck-oss/mcp/internal/agents"
-	"github.com/puck-security/puck-oss/mcp/internal/audit"
-	"github.com/puck-security/puck-oss/mcp/internal/config"
-	"github.com/puck-security/puck-oss/mcp/internal/investigation"
-	"github.com/puck-security/puck-oss/mcp/internal/skills"
+	"github.com/puck-security/puck-scout/mcp/internal/agents"
+	"github.com/puck-security/puck-scout/mcp/internal/audit"
+	"github.com/puck-security/puck-scout/mcp/internal/config"
+	"github.com/puck-security/puck-scout/mcp/internal/investigation"
+	"github.com/puck-security/puck-scout/mcp/internal/skills"
 )
 
 // testRouterFixture is a fully-wired Router suitable for execution-path

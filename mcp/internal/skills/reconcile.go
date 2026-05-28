@@ -1,6 +1,6 @@
 package skills
 
-import "github.com/puck-security/puck-oss/mcp/internal/policy"
+import "github.com/puck-security/puck-scout/mcp/internal/policy"
 
 // Reconcile compares each skill's RequiredCommands against the embedded
 // policy grammar (policy/policy.toml) and populates Status +

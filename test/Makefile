@@ -78,12 +78,12 @@ build-mcp:
 skills:
 	@echo "==> Packaging skills..."
 	@mkdir -p $(STAGE_DIR)
-	@tar -czf $(STAGE_DIR)/puck-oss-skills.tar.gz -C $(REPO_ROOT)/skills .
-	@echo "    staged: $(STAGE_DIR)/puck-oss-skills.tar.gz"
+	@tar -czf $(STAGE_DIR)/puck-scout-skills.tar.gz -C $(REPO_ROOT)/skills .
+	@echo "    staged: $(STAGE_DIR)/puck-scout-skills.tar.gz"
 
 checksums:
 	@echo "==> Generating SHA256SUMS..."
-	@cd $(STAGE_DIR) && shasum -a 256 $(AGENT_BIN) $(MCP_BIN) puck-oss-skills.tar.gz > SHA256SUMS
+	@cd $(STAGE_DIR) && shasum -a 256 $(AGENT_BIN) $(MCP_BIN) puck-scout-skills.tar.gz > SHA256SUMS
 	@cat $(STAGE_DIR)/SHA256SUMS
 
 stage: build-agent build-mcp skills checksums

@@ -261,7 +261,7 @@ jobs:
           merge-multiple: true
 
       - name: Package skills
-        run: tar -czf dist/puck-oss-skills.tar.gz -C skills .
+        run: tar -czf dist/puck-scout-skills.tar.gz -C skills .
 
       - name: Bundle install scripts
         run: |
@@ -286,7 +286,7 @@ jobs:
       - name: Checksums
         run: |
           cd dist
-          sha256sum puck-agent-* puck-mcp-* puck-oss-skills.tar.gz *.sbom.spdx.json | tee SHA256SUMS
+          sha256sum puck-agent-* puck-mcp-* puck-scout-skills.tar.gz *.sbom.spdx.json | tee SHA256SUMS
 
       # Keyless cosign signing via GitHub OIDC.  No long-lived key
       # material — the signature includes the certificate that bound
@@ -297,7 +297,7 @@ jobs:
       #
       #   cosign verify-blob \
       #       --certificate-identity-regexp \
-      #         "https://github.com/puck-security/puck-oss/.github/workflows/release.yml@.*" \
+      #         "https://github.com/puck-security/puck-scout/.github/workflows/release.yml@.*" \
       #       --certificate-oidc-issuer https://token.actions.githubusercontent.com \
       #       --signature <file>.sig --certificate <file>.cert \
       #       <file>
@@ -310,7 +310,7 @@ jobs:
         # SHA256SUMS itself is still signed below as a one-stop manifest.
         run: |
           set -euo pipefail
-          for f in puck-agent-* puck-mcp-* puck-oss-skills.tar.gz *.sbom.spdx.json; do
+          for f in puck-agent-* puck-mcp-* puck-scout-skills.tar.gz *.sbom.spdx.json; do
             [ -f "$f" ] || continue
             case "$f" in *.sig|*.cert) continue;; esac
             cosign sign-blob --yes \
@@ -335,7 +335,7 @@ jobs:
         working-directory: dist
         run: |
           set -euo pipefail
-          hashes=$(sha256sum puck-agent-* puck-mcp-* puck-oss-skills.tar.gz *.sbom.spdx.json | base64 -w0)
+          hashes=$(sha256sum puck-agent-* puck-mcp-* puck-scout-skills.tar.gz *.sbom.spdx.json | base64 -w0)
           echo "hashes=$hashes" >> "$GITHUB_OUTPUT"
 
       - name: Release
@@ -344,7 +344,7 @@ jobs:
           files: |
             dist/puck-agent-*
             dist/puck-mcp-*
-            dist/puck-oss-skills.tar.gz
+            dist/puck-scout-skills.tar.gz
             dist/install-agent.sh
             dist/setup-mcp.sh
             dist/*.sbom.spdx.json
@@ -361,7 +361,7 @@ jobs:
   #
   #   slsa-verifier verify-artifact \
   #     --provenance-path multiple.intoto.jsonl \
-  #     --source-uri github.com/puck-security/puck-oss \
+  #     --source-uri github.com/puck-security/puck-scout \
   #     --source-tag v0.3.0 \
   #     puck-agent-linux-amd64
   #

@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["Puck Security"]
 description = "Puck endpoint agent — read-only command executor for autonomous endpoint investigation"
 license = "MIT"
-repository = "https://github.com/puck-security/puck-oss"
+repository = "https://github.com/puck-security/puck-scout"
 readme = "README.md"
 
 # winres compiles a Windows PE resource block (CompanyName, LegalCopyright,

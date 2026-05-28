@@ -234,7 +234,7 @@ cd /tmp/puck-download/
 cosign verify-blob \
     --signature SHA256SUMS.sig \
     --certificate SHA256SUMS.cert \
-    --certificate-identity-regexp 'https://github.com/puck-security/puck-oss/\.github/workflows/release\.yml@refs/tags/v.*' \
+    --certificate-identity-regexp 'https://github.com/puck-security/puck-scout/\.github/workflows/release\.yml@refs/tags/v.*' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
     SHA256SUMS
 

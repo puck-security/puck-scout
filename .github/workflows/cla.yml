@@ -23,13 +23,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           path-to-signatures: 'signatures/version1/cla.json'
-          path-to-document: 'https://github.com/puck-security/puck-oss/blob/main/CLA.md'
+          path-to-document: 'https://github.com/puck-security/puck-scout/blob/main/CLA.md'
           branch: 'main'
           allowlist: dependabot[bot],renovate[bot]
           create-file-commit-message: 'chore: create CLA signature file'
           signed-commit-message: 'docs(cla): $contributorName signed the CLA in #$pullRequestNo'
           custom-notsigned-prcomment: |
-            Thanks for opening this PR!  Before we can merge it, you (or your employer) need to sign the [Puck Security CLA](https://github.com/puck-security/puck-oss/blob/main/CLA.md).
+            Thanks for opening this PR!  Before we can merge it, you (or your employer) need to sign the [Puck Security CLA](https://github.com/puck-security/puck-scout/blob/main/CLA.md).
 
             **To sign**, please reply to this PR with the exact text:
 

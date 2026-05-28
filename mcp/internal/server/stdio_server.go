@@ -8,8 +8,8 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/puck-security/puck-oss/mcp/internal/mcp"
-	"github.com/puck-security/puck-oss/mcp/internal/router"
+	"github.com/puck-security/puck-scout/mcp/internal/mcp"
+	"github.com/puck-security/puck-scout/mcp/internal/router"
 )
 
 const (

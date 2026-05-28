@@ -4,10 +4,10 @@ Install the MCP server on your workstation, enroll endpoints, and run your first
 
 > **Just want to kick the tires?** Build from source and test locally without deploying anything:
 > ```bash
-> git clone https://github.com/puck-security/puck-oss.git
-> cd puck-oss/test && make test-install && make run-agent
+> git clone https://github.com/puck-security/puck-scout.git
+> cd puck-scout/test && make test-install && make run-agent
 > ```
-> Then open Claude Code in the `puck-oss` directory and ask a question. `make stop` tears down, `make clean` removes everything. Requires [Rust](https://rustup.rs/) and [Go 1.22+](https://go.dev/dl/).
+> Then open Claude Code in the `puck-scout` directory and ask a question. `make stop` tears down, `make clean` removes everything. Requires [Rust](https://rustup.rs/) and [Go 1.22+](https://go.dev/dl/).
 
 ---
 
@@ -31,7 +31,7 @@ If you have prebuilt binaries already, **skip to [Step 1](#step-1-set-up-the-mcp
 
 ### Step 0: Install the binaries
 
-Download prebuilt binaries from [GitHub releases](https://github.com/puck-security/puck-oss/releases/latest) — pick the right file for your platform.  **All six platforms are first-class** — the agent runs natively on Linux, macOS, and Windows, and `puck-mcp` builds for the same six targets:
+Download prebuilt binaries from [GitHub releases](https://github.com/puck-security/puck-scout/releases/latest) — pick the right file for your platform.  **All six platforms are first-class** — the agent runs natively on Linux, macOS, and Windows, and `puck-mcp` builds for the same six targets:
 
 | Platform | puck-mcp | puck-agent |
 |----------|----------|------------|
@@ -103,7 +103,7 @@ If you're not sure, pick the mesh pattern. Tailscale has a free personal tier, w
 `setup-mcp.sh` requires `puck-mcp` to be on `PATH`. If the binary is in a non-standard location, set `PUCK_MCP_BIN=/absolute/path/to/puck-mcp` before running.
 
 ```bash
-curl -fsSL https://github.com/puck-security/puck-oss/releases/latest/download/setup-mcp.sh | \
+curl -fsSL https://github.com/puck-security/puck-scout/releases/latest/download/setup-mcp.sh | \
   bash -s -- --hostname puck-mcp.internal
 ```
 
@@ -111,7 +111,7 @@ For the mesh / DDNS patterns, pass both the stable name and any extra addresses 
 
 ```bash
 # Tailscale example
-curl -fsSL https://github.com/puck-security/puck-oss/releases/latest/download/setup-mcp.sh | \
+curl -fsSL https://github.com/puck-security/puck-scout/releases/latest/download/setup-mcp.sh | \
   bash -s -- --hostname mybox.tail-abc123.ts.net \
               --server-cert-sans mybox.tail-abc123.ts.net,100.64.0.5,127.0.0.1,::1
 ```
@@ -171,7 +171,7 @@ TOKEN_FILE=$(mktemp /tmp/puck-bt.XXXXXX) && chmod 600 "$TOKEN_FILE"
 printf 'Paste the puck-bt-… token (input hidden): '; read -rs TOKEN; echo
 printf '%s' "$TOKEN" > "$TOKEN_FILE"; unset TOKEN
 
-curl -fsSL https://github.com/puck-security/puck-oss/releases/latest/download/install-agent.sh | \
+curl -fsSL https://github.com/puck-security/puck-scout/releases/latest/download/install-agent.sh | \
   bash -s -- --server https://puck-mcp.internal:50281 \
              --hostname eng-laptop-47 \
              --token-file "$TOKEN_FILE"
@@ -304,7 +304,7 @@ for h in "${HOSTS[@]}"; do
     ssh "user@$h" \
       "PUCK_BOOTSTRAP_TOKEN='$TOKEN' bash -s -- \
        --server $MCP --hostname '$h' --server-ca-fingerprint $FP --download-binary" \
-      < <(curl -fsSL https://raw.githubusercontent.com/puck-security/puck-oss/main/scripts/install-agent.sh) &
+      < <(curl -fsSL https://raw.githubusercontent.com/puck-security/puck-scout/main/scripts/install-agent.sh) &
 done
 wait
 ```
@@ -523,8 +523,8 @@ If `puck-mcp` is running as a system service AND Claude Code is configured to fo
 ### Build for your current platform
 
 ```bash
-git clone https://github.com/puck-security/puck-oss.git
-cd puck-oss
+git clone https://github.com/puck-security/puck-scout.git
+cd puck-scout
 
 # Endpoint agent (Rust)
 cd agent && cargo build --release && cd ..
@@ -643,15 +643,15 @@ Release binaries follow the naming convention `puck-agent-${os}-${arch}[.exe]`:
 {
   "mcpServers": {
     "puck": {
-      "command": "/absolute/path/to/puck-oss/mcp/puck-mcp",
-      "args": ["--transport", "stdio", "--config", "/absolute/path/to/puck-oss/mcp/puck-mcp.yaml"],
-      "cwd": "/absolute/path/to/puck-oss/mcp"
+      "command": "/absolute/path/to/puck-scout/mcp/puck-mcp",
+      "args": ["--transport", "stdio", "--config", "/absolute/path/to/puck-scout/mcp/puck-mcp.yaml"],
+      "cwd": "/absolute/path/to/puck-scout/mcp"
     }
   }
 }
 ```
 
-Replace `/absolute/path/to/puck-oss` with your actual clone path.
+Replace `/absolute/path/to/puck-scout` with your actual clone path.
 
 ### Local end-to-end test
 

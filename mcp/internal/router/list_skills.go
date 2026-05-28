@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/puck-security/puck-oss/mcp/internal/mcp"
-	"github.com/puck-security/puck-oss/mcp/internal/skills"
+	"github.com/puck-security/puck-scout/mcp/internal/mcp"
+	"github.com/puck-security/puck-scout/mcp/internal/skills"
 )
 
 type skillInputSummary struct {

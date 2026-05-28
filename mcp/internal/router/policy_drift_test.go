@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/puck-security/puck-oss/mcp/internal/policy"
+	"github.com/puck-security/puck-scout/mcp/internal/policy"
 )
 
 // TestEnrichAgentError_NoOpForNonPolicyErrors guards that resolver
