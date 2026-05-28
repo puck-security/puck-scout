@@ -29,7 +29,7 @@ jobs:
           # `cla-signatures` is an orphan with no other history; the bot
           # creates and updates the signature file there.
           branch: 'cla-signatures'
-          allowlist: dependabot[bot],renovate[bot]
+          allowlist: dependabot[bot],renovate[bot],noah-adversis,jordanpotti
           create-file-commit-message: 'chore: create CLA signature file'
           signed-commit-message: 'docs(cla): $contributorName signed the CLA in #$pullRequestNo'
           custom-notsigned-prcomment: |
