@@ -56,6 +56,7 @@ pub fn enforce_not_writable_by_others(path: &Path) -> Result<()> {
                 mode
             );
         }
+        // nosemgrep: rust.lang.security.unsafe-usage.unsafe-usage
         let euid = unsafe { libc::geteuid() };
         let owner = meta.uid();
         if owner != 0 && owner != euid {

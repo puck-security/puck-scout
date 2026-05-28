@@ -409,6 +409,7 @@ mod tests {
     #[test]
     fn yaml_writer_round_trips_windows_paths() {
         let tmp =
+            // nosemgrep: rust.lang.security.temp-dir.temp-dir
             std::env::temp_dir().join(format!("puck-yaml-windows-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
@@ -479,6 +480,7 @@ mod tests {
         // clobber it — operator customisations (extra paths, allowlist
         // tweaks) would otherwise be lost on re-enrollment.
         let tmp =
+            // nosemgrep: rust.lang.security.temp-dir.temp-dir
             std::env::temp_dir().join(format!("puck-yaml-preserve-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
