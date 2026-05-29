@@ -359,6 +359,217 @@ flags = [
     { name = "-i", value = "string" }, { name = "-n", value = "none" },
     { name = "-P", value = "none"   }, { name = "-p", value = "uint"   },
     { name = "-u", value = "string" }, { name = "-c", value = "string" },
+    # Selection + output shaping for IR triage.
+    { name = "-a", value = "none"   }, { name = "-d", value = "string" },
+    { name = "-t", value = "none"   }, { name = "-F", value = "string" },
+    { name = "+D", value = "fs_path" },
+]
+
+# ============================================================================
+# Linux-IR sweep: session/user/log/network/service binaries.
+# ----------------------------------------------------------------------------
+# All read-only.  State-changing verbs are kept out via either subcommand
+# allowlisting, forbidden_flags, or absence of any positional/flag grammar
+# that would permit the destructive form.
+# ============================================================================
+
+# who — current login sessions (utmp).  Equivalent of `last`-but-live.
+[binary.who]
+canonical_paths = ["/usr/bin/who", "/bin/who"]
+flags = [
+    { name = "-a", value = "none" }, { name = "-b", value = "none" },
+    { name = "-d", value = "none" }, { name = "-H", value = "none" },
+    { name = "-l", value = "none" }, { name = "-p", value = "none" },
+    { name = "-q", value = "none" }, { name = "-r", value = "none" },
+    { name = "-s", value = "none" }, { name = "-t", value = "none" },
+    { name = "-T", value = "none" }, { name = "-u", value = "none" },
+]
+
+# w — current sessions plus what each is doing.
+[binary.w]
+canonical_paths = ["/usr/bin/w", "/bin/w"]
+flags = [
+    { name = "-h", value = "none" }, { name = "-s", value = "none" },
+    { name = "-i", value = "none" }, { name = "-f", value = "none" },
+    { name = "-u", value = "none" }, { name = "-o", value = "none" },
+    { name = "--no-header", value = "none" },
+]
+positional = { kind = "string", min = 0, max = 1 }
+
+# lastlog — most-recent login per user (siblings: last, lastb).
+[binary.lastlog]
+canonical_paths = ["/usr/bin/lastlog"]
+flags = [
+    { name = "-u", value = "string" }, { name = "-b", value = "uint" },
+    { name = "-t", value = "uint"   }, { name = "-C", value = "none" },
+]
+forbidden_flags = ["-S", "--set"]
+
+# getent — NSS lookups (passwd, group, hosts, services, shadow).
+# Essential for translating UIDs to logins, group memberships, and
+# resolving service ports without leaving the host.
+[binary.getent]
+canonical_paths = ["/usr/bin/getent", "/bin/getent"]
+subcommand_required = true
+subcommands = [
+    "passwd", "group", "hosts", "ahosts", "ahostsv4", "ahostsv6",
+    "services", "protocols", "networks", "shadow", "gshadow", "aliases",
+    "initgroups", "rpc", "ethers", "netgroup",
+]
+positional = { kind = "string", min = 0, max = 8 }
+
+# chage — password-aging info.  Only `-l` (list) is allowed; every
+# other flag mutates account state.
+[binary.chage]
+canonical_paths = ["/usr/bin/chage"]
+flags = [ { name = "-l", value = "none" } ]
+forbidden_flags = ["-d", "-E", "-I", "-m", "-M", "-W", "-R"]
+positional = { kind = "string", min = 1, max = 1 }
+
+# dmesg — kernel ring buffer.  Forbidden flags exclude --clear,
+# --console-off, --console-on; everything else is read-only.
+[binary.dmesg]
+canonical_paths = ["/usr/bin/dmesg", "/bin/dmesg"]
+flags = [
+    { name = "-T", value = "none" }, { name = "--ctime", value = "none" },
+    { name = "-k", value = "none" }, { name = "-u", value = "none" },
+    { name = "-x", value = "none" }, { name = "-r", value = "none" },
+    { name = "-H", value = "none" }, { name = "-w", value = "none" },
+    { name = "-l", value = "string" }, { name = "--level", value = "string" },
+    { name = "--since", value = "string" }, { name = "--until", value = "string" },
+    { name = "-f", value = "string" }, { name = "--facility", value = "string" },
+]
+forbidden_flags = ["-C", "--clear", "-c", "--read-clear", "-D", "--console-off", "-E", "--console-on", "-n", "--console-level"]
+
+# systemctl — read-only systemd queries.  `start`, `stop`, `restart`,
+# `reload`, `enable`, `disable`, `mask`, `unmask`, `daemon-reload`,
+# `kill`, `reset-failed`, `set-default` mutate state and are excluded
+# by absence from the subcommand allowlist.
+[binary.systemctl]
+canonical_paths = ["/bin/systemctl", "/usr/bin/systemctl"]
+subcommand_required = true
+subcommands = [
+    "status", "show", "cat", "list-units", "list-unit-files",
+    "list-timers", "list-sockets", "list-jobs", "list-dependencies",
+    "is-enabled", "is-active", "is-failed", "get-default",
+    "get-property", "environment", "list-machines",
+]
+flags = [
+    { name = "--no-pager",   value = "none" },
+    { name = "--all",        value = "none" },
+    { name = "-a",           value = "none" },
+    { name = "--full",       value = "none" },
+    { name = "-l",           value = "none" },
+    { name = "--type",       value = "string" },
+    { name = "-t",           value = "string" },
+    { name = "--state",      value = "string" },
+    { name = "--property",   value = "string" },
+    { name = "-p",           value = "string" },
+    { name = "--no-legend",  value = "none" },
+    { name = "-n",           value = "uint"   },
+    { name = "--user",       value = "none" },
+    { name = "--system",     value = "none" },
+]
+positional = { kind = "string", min = 0, max = 8 }
+
+# pgrep — process search by pattern.  Read-only.  pkill is a different
+# binary (NOT allowlisted) and the destructive flags here would only
+# work if pgrep accepted them, which it does not.
+[binary.pgrep]
+canonical_paths = ["/usr/bin/pgrep", "/bin/pgrep"]
+flags = [
+    { name = "-l", value = "none" }, { name = "-a", value = "none" },
+    { name = "-f", value = "none" }, { name = "-u", value = "string" },
+    { name = "-U", value = "string" }, { name = "-n", value = "none" },
+    { name = "-o", value = "none" }, { name = "-c", value = "none" },
+    { name = "-x", value = "none" }, { name = "-d", value = "string" },
+    { name = "-t", value = "string" }, { name = "-P", value = "uint" },
+]
+positional = { kind = "string", min = 0, max = 4 }
+
+# ip — Linux networking enumeration.  Only `show` verbs are admitted;
+# `add`, `del`, `set`, `flush`, `change`, `replace` are state-changing
+# and excluded by being absent.
+[binary.ip]
+canonical_paths = ["/usr/sbin/ip", "/sbin/ip", "/usr/bin/ip", "/bin/ip"]
+subcommand_required = true
+subcommands = [
+    "addr", "addr show", "a", "a show",
+    "link", "link show", "l", "l show",
+    "route", "route show", "r", "r show",
+    "neigh", "neigh show", "n", "n show",
+    "rule", "rule show",
+    "tunnel", "tunnel show",
+    "maddr", "maddr show",
+    "netns", "netns show", "netns list",
+]
+flags = [
+    { name = "-4",   value = "none" }, { name = "-6",  value = "none" },
+    { name = "-br",  value = "none" }, { name = "-c",  value = "none" },
+    { name = "-o",   value = "none" }, { name = "-s",  value = "none" },
+    { name = "-d",   value = "none" }, { name = "-j",  value = "none" },
+    { name = "-p",   value = "none" }, { name = "-r",  value = "none" },
+    { name = "-n",   value = "none" },
+    { name = "dev",  value = "string" }, { name = "scope", value = "string" },
+]
+positional = { kind = "string", min = 0, max = 4 }
+
+# arp — ARP cache.  Read-only modes only (`-a` / `-n`).  Set / delete
+# modes (`-s`, `-d`) are excluded by forbidden_flags.
+[binary.arp]
+canonical_paths = ["/usr/sbin/arp", "/sbin/arp", "/usr/bin/arp"]
+flags = [
+    { name = "-a", value = "none" }, { name = "-n", value = "none" },
+    { name = "-v", value = "none" }, { name = "-e", value = "none" },
+    { name = "-D", value = "none" }, { name = "-i", value = "string" },
+]
+forbidden_flags = ["-d", "-s", "-f", "--delete", "--set", "--file"]
+
+# mount — bare invocation lists existing mounts (read-only).  Any
+# positional argument would attempt to mount, so we declare no
+# positional grammar; the engine rejects positional args with
+# unexpected_positional.
+[binary.mount]
+canonical_paths = ["/bin/mount", "/usr/bin/mount", "/sbin/mount"]
+flags = [
+    { name = "-l", value = "none" }, { name = "-v", value = "none" },
+    { name = "-t", value = "string" }, { name = "--show-labels", value = "none" },
+]
+
+# df — filesystem usage.  Read-only by construction.
+[binary.df]
+canonical_paths = ["/bin/df", "/usr/bin/df"]
+flags = [
+    { name = "-h", value = "none" }, { name = "-H", value = "none" },
+    { name = "-T", value = "none" }, { name = "-i", value = "none" },
+    { name = "-a", value = "none" }, { name = "-k", value = "none" },
+    { name = "-m", value = "none" }, { name = "-l", value = "none" },
+    { name = "-P", value = "none" }, { name = "-t", value = "string" },
+    { name = "-x", value = "string" }, { name = "--output", value = "string" },
+]
+positional = { kind = "fs_path", min = 0, max = 4, restrict_to_prefixes = ["/", "/etc", "/var", "/home", "/root", "/srv", "/snap", "/var/snap", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp"] }
+
+# du — directory size.  Read-only; like df.
+[binary.du]
+canonical_paths = ["/usr/bin/du", "/bin/du"]
+flags = [
+    { name = "-h", value = "none" }, { name = "-s", value = "none" },
+    { name = "-c", value = "none" }, { name = "-a", value = "none" },
+    { name = "-k", value = "none" }, { name = "-m", value = "none" },
+    { name = "-x", value = "none" }, { name = "-L", value = "none" },
+    { name = "-d", value = "uint" }, { name = "--max-depth", value = "uint" },
+    { name = "--exclude", value = "glob" },
+]
+positional = { kind = "fs_path", min = 1, max = 8, restrict_to_prefixes = ["/", "/etc", "/var", "/home", "/root", "/srv", "/snap", "/var/snap", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp"] }
+
+# free — memory snapshot.
+[binary.free]
+canonical_paths = ["/usr/bin/free", "/bin/free"]
+flags = [
+    { name = "-h", value = "none" }, { name = "-b", value = "none" },
+    { name = "-k", value = "none" }, { name = "-m", value = "none" },
+    { name = "-g", value = "none" }, { name = "-w", value = "none" },
+    { name = "-t", value = "none" }, { name = "--si", value = "none" },
 ]
 
 [binary.dscl]
