@@ -39,6 +39,18 @@ flags = [
     { name = "-print0",   value = "none" },
     { name = "-not",      value = "none" },
     { name = "-or",       value = "none" },
+    # IR-investigation niceties.  All read-only; none can write or mutate.
+    { name = "-ls",       value = "none" },
+    { name = "-printf",   value = "string" },
+    { name = "-empty",    value = "none" },
+    { name = "-newer",    value = "fs_path" },
+    { name = "-readable", value = "none" },
+    { name = "-size",     value = "string" },
+    { name = "-user",     value = "string" },
+    { name = "-group",    value = "string" },
+    { name = "-perm",     value = "string" },
+    { name = "-regex",    value = "string" },
+    { name = "-iregex",   value = "string" },
 ]
 forbidden_flags = ["-exec","-execdir","-delete","-fprint","-fprintf","-fls","-ok","-okdir"]
 
@@ -110,13 +122,28 @@ positional = { kind = "fs_path", min = 1, max = 32, restrict_to_prefixes = ["/et
 flags = [
     { name = "-i", value = "none" },
     { name = "-r", value = "none" },
+    { name = "-R", value = "none" },
     { name = "-n", value = "none" },
     { name = "-l", value = "none" },
+    { name = "-L", value = "none" },
     { name = "-E", value = "none" },
     { name = "-e", value = "string" },
     { name = "-F", value = "none" },
+    # Context lines — essential for IR triage.
+    { name = "-A", value = "uint" },
+    { name = "-B", value = "uint" },
+    { name = "-C", value = "uint" },
+    # Output shaping.
+    { name = "-h", value = "none" },
+    { name = "-H", value = "none" },
+    { name = "-o", value = "none" },
+    { name = "-v", value = "none" },
+    { name = "-c", value = "none" },
+    { name = "-w", value = "none" },
+    { name = "-x", value = "none" },
     { name = "--include", value = "glob" },
     { name = "--exclude", value = "glob" },
+    { name = "--exclude-dir", value = "glob" },
 ]
 
 [binary.ls]
