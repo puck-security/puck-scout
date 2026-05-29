@@ -22,6 +22,20 @@ jobs:
   #
   # Windows: native MSVC runner for both amd64 and arm64. The arm64 MSVC
   # cross-toolchain is included in windows-latest images.
+  # Linux agent is built fully static against musl libc.  glibc is
+  # backward-compatible but not forward-compatible, so a binary linked
+  # against (say) glibc 2.39 on ubuntu-24.04 hard-fails on 22.04 / 20.04 /
+  # Debian 11 / Amazon Linux 2 / RHEL 8 — i.e. most of the installed
+  # base.  musl-static dodges this entirely: no libc dependency, runs on
+  # any Linux ≥ 3.2.  We pair this with rustls (no libssl linkage) and
+  # avoid system NSS calls (the agent reads local files and dials the
+  # MCP server by configured address, not by hostname-via-NSS).
+  #
+  # Cross-compilation uses cargo-zigbuild + zig as the cross-linker:
+  # one toolchain handles both x86_64 and aarch64 targets without per-
+  # arch sysroot wrangling.  A post-build objdump guard fails the job
+  # if the binary picks up any GLIBC_* symbol references (would mean
+  # something snuck in a glibc-only dep).
   build-agent-linux:
     name: agent / linux
     runs-on: ubuntu-latest
@@ -31,10 +45,15 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu
+          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
 
-      - name: Install aarch64 cross linker
-        run: sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Install zig (cross-linker for both musl targets)
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.13.0
+
+      - name: Install cargo-zigbuild
+        run: cargo install --locked cargo-zigbuild@0.19.5
 
       - name: Cache Cargo registry
         uses: actions/cache@v4
@@ -44,23 +63,37 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             agent/target
-          key: cargo-linux-${{ hashFiles('agent/Cargo.lock') }}
-          restore-keys: cargo-linux-
+          key: cargo-linux-musl-${{ hashFiles('agent/Cargo.lock') }}
+          restore-keys: cargo-linux-musl-
 
-      - name: Build linux-amd64
+      - name: Build linux-amd64 (musl static)
         working-directory: agent
-        run: cargo build --release --target x86_64-unknown-linux-gnu
+        run: cargo zigbuild --release --target x86_64-unknown-linux-musl
 
-      - name: Build linux-arm64
+      - name: Build linux-arm64 (musl static)
         working-directory: agent
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-        run: cargo build --release --target aarch64-unknown-linux-gnu
+        run: cargo zigbuild --release --target aarch64-unknown-linux-musl
 
       - name: Stage binaries
         run: |
-          cp agent/target/x86_64-unknown-linux-gnu/release/puck-agent puck-agent-linux-amd64
-          cp agent/target/aarch64-unknown-linux-gnu/release/puck-agent puck-agent-linux-arm64
+          cp agent/target/x86_64-unknown-linux-musl/release/puck-agent puck-agent-linux-amd64
+          cp agent/target/aarch64-unknown-linux-musl/release/puck-agent puck-agent-linux-arm64
+
+      - name: Verify Linux binaries are fully static (no glibc refs)
+        # If the binary picks up any GLIBC_* symbol it would silently
+        # narrow the supported fleet to whatever distro built it.  Fail
+        # loud at release time instead of at deploy time on a customer
+        # endpoint.
+        run: |
+          set -euo pipefail
+          for bin in puck-agent-linux-amd64 puck-agent-linux-arm64; do
+            glibc_refs=$(objdump -T "$bin" 2>/dev/null | grep -oE 'GLIBC_[0-9.]+' | sort -V -u || true)
+            if [ -n "$glibc_refs" ]; then
+              echo "::error file=$bin::$bin still references glibc symbols: $glibc_refs"
+              exit 1
+            fi
+            echo "$bin: no glibc symbols (fully static) ✓"
+          done
 
       - uses: actions/upload-artifact@v4
         with:
