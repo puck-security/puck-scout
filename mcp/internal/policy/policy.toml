@@ -487,21 +487,24 @@ flags = [
 ]
 positional = { kind = "string", min = 0, max = 4 }
 
-# ip — Linux networking enumeration.  Only `show` verbs are admitted;
-# `add`, `del`, `set`, `flush`, `change`, `replace` are state-changing
-# and excluded by being absent.
+# ip — Linux networking enumeration.  Only the explicit `show` forms are
+# admitted: bare `addr`, `link`, `route` etc. would still accept `add` /
+# `del` / `set` as positional args (the engine does not know those words
+# are verbs), leaking state-changing operations.  IR callers use
+# `ip addr show`, `ip route show`, etc.
 [binary.ip]
 canonical_paths = ["/usr/sbin/ip", "/sbin/ip", "/usr/bin/ip", "/bin/ip"]
 subcommand_required = true
 subcommands = [
-    "addr", "addr show", "a", "a show",
-    "link", "link show", "l", "l show",
-    "route", "route show", "r", "r show",
-    "neigh", "neigh show", "n", "n show",
-    "rule", "rule show",
-    "tunnel", "tunnel show",
-    "maddr", "maddr show",
-    "netns", "netns show", "netns list",
+    "addr show",
+    "link show",
+    "route show",
+    "neigh show",
+    "rule show",
+    "tunnel show",
+    "maddr show",
+    "netns show",
+    "netns list",
 ]
 flags = [
     { name = "-4",   value = "none" }, { name = "-6",  value = "none" },
