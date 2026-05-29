@@ -207,11 +207,115 @@ flags = [ { name = "-b", value = "none" }, { name = "-i", value = "none" } ]
 
 [binary.dpkg]
 canonical_paths = ["/usr/bin/dpkg"]
-flags = [ { name = "-l", value = "none" }, { name = "-s", value = "string" }, { name = "-L", value = "string" } ]
+flags = [
+    { name = "-l", value = "none" },        # list installed
+    { name = "-s", value = "string" },      # status of pkg
+    { name = "-L", value = "string" },      # list files in pkg
+    { name = "-S", value = "string" },      # search file → pkg
+    { name = "-p", value = "string" },      # detailed pkg info
+    { name = "-V", value = "string" },      # verify (read-only integrity check)
+    { name = "--verify", value = "string" },
+    { name = "--list", value = "none" },
+    { name = "--status", value = "string" },
+    { name = "--listfiles", value = "string" },
+]
+forbidden_flags = ["-i", "-r", "-P", "--install", "--remove", "--purge", "--unpack", "--configure"]
+
+# dpkg-query — non-mutating sibling to dpkg, used heavily on debian
+# IR for structured package data.
+[binary.dpkg-query]
+canonical_paths = ["/usr/bin/dpkg-query"]
+flags = [
+    { name = "-l", value = "none" },
+    { name = "-W", value = "string" },      # -W <pattern> = list packages by glob
+    { name = "-f", value = "string" },      # --showformat
+    { name = "--list", value = "none" },
+    { name = "--show", value = "string" },
+    { name = "--status", value = "string" },
+    { name = "--listfiles", value = "string" },
+]
 
 [binary.rpm]
 canonical_paths = ["/usr/bin/rpm", "/bin/rpm"]
-flags = [ { name = "-qa", value = "none" }, { name = "-qi", value = "string" }, { name = "-ql", value = "string" } ]
+flags = [
+    { name = "-qa", value = "none" },       # query all
+    { name = "-qi", value = "string" },     # query info
+    { name = "-ql", value = "string" },     # query file list
+    { name = "-qf", value = "fs_path" },    # query owner of file
+    { name = "-qR", value = "string" },     # requires
+    { name = "-qd", value = "string" },     # docs
+    { name = "-qc", value = "string" },     # config files
+    { name = "-V", value = "string" },      # verify
+    { name = "-Va", value = "none" },       # verify all
+    { name = "--query", value = "string" },
+    { name = "--queryformat", value = "string" },
+]
+forbidden_flags = ["-i", "-U", "-F", "-e", "--install", "--upgrade", "--freshen", "--erase"]
+
+# apt — Debian/Ubuntu package CLI.  Read-only verbs only.
+# `apt list --installed` and `apt show <pkg>` are the IR-essential ones.
+# install / remove / purge / update / upgrade / autoremove are excluded
+# by being absent from the subcommand allowlist.
+[binary.apt]
+canonical_paths = ["/usr/bin/apt"]
+subcommand_required = true
+subcommands = [
+    "list",
+    "list --installed",
+    "list --upgradable",
+    "list --manual-installed",
+    "show",
+    "policy",
+    "depends",
+    "rdepends",
+]
+flags = [
+    { name = "--installed",        value = "none" },
+    { name = "--upgradable",       value = "none" },
+    { name = "--manual-installed", value = "none" },
+    { name = "--all-versions",     value = "none" },
+    { name = "-a",                 value = "none" },
+]
+positional = { kind = "string", min = 0, max = 4 }
+
+# apt-cache — older form, still relevant on systems whose `apt` is
+# locked or where investigators prefer the lower-level interface.
+[binary.apt-cache]
+canonical_paths = ["/usr/bin/apt-cache"]
+subcommand_required = true
+subcommands = ["search", "show", "showpkg", "depends", "rdepends", "policy", "pkgnames", "stats"]
+positional = { kind = "string", min = 0, max = 4 }
+
+# snap — Canonical's snap CLI.  Read-only enumeration only.
+# install / remove / refresh / revert / disable / enable mutate state
+# and are excluded by being absent from the subcommand allowlist.
+[binary.snap]
+canonical_paths = ["/usr/bin/snap", "/snap/bin/snap"]
+subcommand_required = true
+subcommands = [
+    "list",
+    "list --all",
+    "info",
+    "find",
+    "connections",
+    "services",
+    "changes",
+    "interface",
+    "interfaces",
+    "warnings",
+    "version",
+    "whoami",
+    "model",
+    "known",
+]
+flags = [
+    { name = "--all",      value = "none" },
+    { name = "--unicode",  value = "string" },
+    { name = "--color",    value = "string" },
+    { name = "--name",     value = "string" },
+    { name = "--abs-time", value = "none" },
+]
+positional = { kind = "string", min = 0, max = 4 }
 
 [binary.brew]
 canonical_paths = ["/usr/local/bin/brew", "/opt/homebrew/bin/brew"]
