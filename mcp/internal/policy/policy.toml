@@ -25,7 +25,7 @@ canonical_paths = [
     "/opt/homebrew/bin/find",
     "C:/Program Files/Git/usr/bin/find.exe",
 ]
-positional = { kind = "fs_path", min = 1, max = 8, restrict_to_prefixes = ["/", "/etc", "/var", "/Users", "/Applications", "/Library", "/private", "/opt", "/usr", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
+positional = { kind = "fs_path", min = 1, max = 8, restrict_to_prefixes = ["/", "/etc", "/var", "/home", "/root", "/srv", "/snap", "/var/snap", "/Users", "/Applications", "/Library", "/private", "/opt", "/usr", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
 flags = [
     { name = "-name",     value = "glob" },
     { name = "-iname",    value = "glob" },
@@ -82,7 +82,7 @@ flags = [
 # Windows path: Git Bash bundles cat.exe.  See the [binary.find] note
 # above re: install-time PATH expectations.
 canonical_paths = ["/bin/cat", "/usr/bin/cat", "C:/Program Files/Git/usr/bin/cat.exe"]
-positional = { kind = "fs_path", min = 1, max = 16, restrict_to_prefixes = ["/etc", "/var", "/proc", "/sys", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
+positional = { kind = "fs_path", min = 1, max = 16, restrict_to_prefixes = ["/etc", "/var", "/proc", "/sys", "/home", "/root", "/srv", "/snap", "/var/snap", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
 flags = [
     { name = "-n", value = "none" },
     { name = "-v", value = "none" },
@@ -90,7 +90,7 @@ flags = [
 
 [binary.head]
 canonical_paths = ["/usr/bin/head", "/bin/head", "C:/Program Files/Git/usr/bin/head.exe"]
-positional = { kind = "fs_path", min = 1, max = 16, restrict_to_prefixes = ["/etc", "/var", "/proc", "/sys", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
+positional = { kind = "fs_path", min = 1, max = 16, restrict_to_prefixes = ["/etc", "/var", "/proc", "/sys", "/home", "/root", "/srv", "/snap", "/var/snap", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
 flags = [
     { name = "-n", value = "uint" },
     { name = "-c", value = "uint" },
@@ -98,7 +98,7 @@ flags = [
 
 [binary.tail]
 canonical_paths = ["/usr/bin/tail", "/bin/tail", "C:/Program Files/Git/usr/bin/tail.exe"]
-positional = { kind = "fs_path", min = 1, max = 16, restrict_to_prefixes = ["/etc", "/var", "/proc", "/sys", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
+positional = { kind = "fs_path", min = 1, max = 16, restrict_to_prefixes = ["/etc", "/var", "/proc", "/sys", "/home", "/root", "/srv", "/snap", "/var/snap", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
 flags = [
     { name = "-n", value = "uint" },
     { name = "-c", value = "uint" },
@@ -106,7 +106,7 @@ flags = [
 
 [binary.grep]
 canonical_paths = ["/usr/bin/grep", "/bin/grep", "C:/Program Files/Git/usr/bin/grep.exe"]
-positional = { kind = "fs_path", min = 1, max = 32, restrict_to_prefixes = ["/etc", "/var", "/proc", "/sys", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
+positional = { kind = "fs_path", min = 1, max = 32, restrict_to_prefixes = ["/etc", "/var", "/proc", "/sys", "/home", "/root", "/srv", "/snap", "/var/snap", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
 flags = [
     { name = "-i", value = "none" },
     { name = "-r", value = "none" },
@@ -121,7 +121,7 @@ flags = [
 
 [binary.ls]
 canonical_paths = ["/bin/ls", "/usr/bin/ls", "C:/Program Files/Git/usr/bin/ls.exe"]
-positional = { kind = "fs_path", min = 0, max = 16, restrict_to_prefixes = ["/", "/etc", "/var", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
+positional = { kind = "fs_path", min = 0, max = 16, restrict_to_prefixes = ["/", "/etc", "/var", "/home", "/root", "/srv", "/snap", "/var/snap", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
 # Single-char value-less flags; the parser auto-recognises any
 # combined-short whose chars are all in this list (the standard Unix
 # `-laR` = `-l -a -R` convention).  No need to enumerate combos here.
@@ -167,7 +167,7 @@ flags = []
 
 [binary.stat]
 canonical_paths = ["/usr/bin/stat", "/bin/stat", "C:/Program Files/Git/usr/bin/stat.exe"]
-positional = { kind = "fs_path", min = 1, max = 16, restrict_to_prefixes = ["/", "/etc", "/var", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "/proc", "/sys", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
+positional = { kind = "fs_path", min = 1, max = 16, restrict_to_prefixes = ["/", "/etc", "/var", "/home", "/root", "/srv", "/snap", "/var/snap", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "/proc", "/sys", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
 flags = [
     { name = "-f", value = "string" }, { name = "-c", value = "string" },
     { name = "-L", value = "none"   },
@@ -175,7 +175,7 @@ flags = [
 
 [binary.file]
 canonical_paths = ["/usr/bin/file", "C:/Program Files/Git/usr/bin/file.exe"]
-positional = { kind = "fs_path", min = 1, max = 16, restrict_to_prefixes = ["/", "/etc", "/var", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
+positional = { kind = "fs_path", min = 1, max = 16, restrict_to_prefixes = ["/", "/etc", "/var", "/home", "/root", "/srv", "/snap", "/var/snap", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
 flags = [ { name = "-b", value = "none" }, { name = "-i", value = "none" } ]
 
 [binary.dpkg]
@@ -670,7 +670,8 @@ canonical_paths = [
 ]
 positional = { kind = "fs_path", min = 1, max = 4, restrict_to_prefixes = [
     "/etc", "/var", "/proc", "/sys", "/Users", "/private",
-    "/Applications", "/Library", "/opt", "/usr", "/tmp", "/home",
+    "/Applications", "/Library", "/opt", "/usr", "/tmp",
+    "/home", "/root", "/srv", "/snap", "/var/snap",
     "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData",
 ] }
 flags = [
