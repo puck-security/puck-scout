@@ -25,7 +25,7 @@ canonical_paths = [
     "/opt/homebrew/bin/find",
     "C:/Program Files/Git/usr/bin/find.exe",
 ]
-positional = { kind = "fs_path", min = 1, max = 8, restrict_to_prefixes = ["/", "/etc", "/var", "/Users", "/Applications", "/Library", "/private", "/opt", "/usr", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
+positional = { kind = "fs_path", min = 1, max = 8, restrict_to_prefixes = ["/", "/etc", "/var", "/home", "/root", "/srv", "/snap", "/var/snap", "/Users", "/Applications", "/Library", "/private", "/opt", "/usr", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
 flags = [
     { name = "-name",     value = "glob" },
     { name = "-iname",    value = "glob" },
@@ -39,6 +39,18 @@ flags = [
     { name = "-print0",   value = "none" },
     { name = "-not",      value = "none" },
     { name = "-or",       value = "none" },
+    # IR-investigation niceties.  All read-only; none can write or mutate.
+    { name = "-ls",       value = "none" },
+    { name = "-printf",   value = "string" },
+    { name = "-empty",    value = "none" },
+    { name = "-newer",    value = "fs_path" },
+    { name = "-readable", value = "none" },
+    { name = "-size",     value = "string" },
+    { name = "-user",     value = "string" },
+    { name = "-group",    value = "string" },
+    { name = "-perm",     value = "string" },
+    { name = "-regex",    value = "string" },
+    { name = "-iregex",   value = "string" },
 ]
 forbidden_flags = ["-exec","-execdir","-delete","-fprint","-fprintf","-fls","-ok","-okdir"]
 
@@ -82,7 +94,7 @@ flags = [
 # Windows path: Git Bash bundles cat.exe.  See the [binary.find] note
 # above re: install-time PATH expectations.
 canonical_paths = ["/bin/cat", "/usr/bin/cat", "C:/Program Files/Git/usr/bin/cat.exe"]
-positional = { kind = "fs_path", min = 1, max = 16, restrict_to_prefixes = ["/etc", "/var", "/proc", "/sys", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
+positional = { kind = "fs_path", min = 1, max = 16, restrict_to_prefixes = ["/etc", "/var", "/proc", "/sys", "/home", "/root", "/srv", "/snap", "/var/snap", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
 flags = [
     { name = "-n", value = "none" },
     { name = "-v", value = "none" },
@@ -90,7 +102,7 @@ flags = [
 
 [binary.head]
 canonical_paths = ["/usr/bin/head", "/bin/head", "C:/Program Files/Git/usr/bin/head.exe"]
-positional = { kind = "fs_path", min = 1, max = 16, restrict_to_prefixes = ["/etc", "/var", "/proc", "/sys", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
+positional = { kind = "fs_path", min = 1, max = 16, restrict_to_prefixes = ["/etc", "/var", "/proc", "/sys", "/home", "/root", "/srv", "/snap", "/var/snap", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
 flags = [
     { name = "-n", value = "uint" },
     { name = "-c", value = "uint" },
@@ -98,7 +110,7 @@ flags = [
 
 [binary.tail]
 canonical_paths = ["/usr/bin/tail", "/bin/tail", "C:/Program Files/Git/usr/bin/tail.exe"]
-positional = { kind = "fs_path", min = 1, max = 16, restrict_to_prefixes = ["/etc", "/var", "/proc", "/sys", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
+positional = { kind = "fs_path", min = 1, max = 16, restrict_to_prefixes = ["/etc", "/var", "/proc", "/sys", "/home", "/root", "/srv", "/snap", "/var/snap", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
 flags = [
     { name = "-n", value = "uint" },
     { name = "-c", value = "uint" },
@@ -106,22 +118,37 @@ flags = [
 
 [binary.grep]
 canonical_paths = ["/usr/bin/grep", "/bin/grep", "C:/Program Files/Git/usr/bin/grep.exe"]
-positional = { kind = "fs_path", min = 1, max = 32, restrict_to_prefixes = ["/etc", "/var", "/proc", "/sys", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
+positional = { kind = "fs_path", min = 1, max = 32, restrict_to_prefixes = ["/etc", "/var", "/proc", "/sys", "/home", "/root", "/srv", "/snap", "/var/snap", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
 flags = [
     { name = "-i", value = "none" },
     { name = "-r", value = "none" },
+    { name = "-R", value = "none" },
     { name = "-n", value = "none" },
     { name = "-l", value = "none" },
+    { name = "-L", value = "none" },
     { name = "-E", value = "none" },
     { name = "-e", value = "string" },
     { name = "-F", value = "none" },
+    # Context lines — essential for IR triage.
+    { name = "-A", value = "uint" },
+    { name = "-B", value = "uint" },
+    { name = "-C", value = "uint" },
+    # Output shaping.
+    { name = "-h", value = "none" },
+    { name = "-H", value = "none" },
+    { name = "-o", value = "none" },
+    { name = "-v", value = "none" },
+    { name = "-c", value = "none" },
+    { name = "-w", value = "none" },
+    { name = "-x", value = "none" },
     { name = "--include", value = "glob" },
     { name = "--exclude", value = "glob" },
+    { name = "--exclude-dir", value = "glob" },
 ]
 
 [binary.ls]
 canonical_paths = ["/bin/ls", "/usr/bin/ls", "C:/Program Files/Git/usr/bin/ls.exe"]
-positional = { kind = "fs_path", min = 0, max = 16, restrict_to_prefixes = ["/", "/etc", "/var", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
+positional = { kind = "fs_path", min = 0, max = 16, restrict_to_prefixes = ["/", "/etc", "/var", "/home", "/root", "/srv", "/snap", "/var/snap", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
 # Single-char value-less flags; the parser auto-recognises any
 # combined-short whose chars are all in this list (the standard Unix
 # `-laR` = `-l -a -R` convention).  No need to enumerate combos here.
@@ -167,7 +194,7 @@ flags = []
 
 [binary.stat]
 canonical_paths = ["/usr/bin/stat", "/bin/stat", "C:/Program Files/Git/usr/bin/stat.exe"]
-positional = { kind = "fs_path", min = 1, max = 16, restrict_to_prefixes = ["/", "/etc", "/var", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "/proc", "/sys", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
+positional = { kind = "fs_path", min = 1, max = 16, restrict_to_prefixes = ["/", "/etc", "/var", "/home", "/root", "/srv", "/snap", "/var/snap", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "/proc", "/sys", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
 flags = [
     { name = "-f", value = "string" }, { name = "-c", value = "string" },
     { name = "-L", value = "none"   },
@@ -175,16 +202,120 @@ flags = [
 
 [binary.file]
 canonical_paths = ["/usr/bin/file", "C:/Program Files/Git/usr/bin/file.exe"]
-positional = { kind = "fs_path", min = 1, max = 16, restrict_to_prefixes = ["/", "/etc", "/var", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
+positional = { kind = "fs_path", min = 1, max = 16, restrict_to_prefixes = ["/", "/etc", "/var", "/home", "/root", "/srv", "/snap", "/var/snap", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp", "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData"] }
 flags = [ { name = "-b", value = "none" }, { name = "-i", value = "none" } ]
 
 [binary.dpkg]
 canonical_paths = ["/usr/bin/dpkg"]
-flags = [ { name = "-l", value = "none" }, { name = "-s", value = "string" }, { name = "-L", value = "string" } ]
+flags = [
+    { name = "-l", value = "none" },        # list installed
+    { name = "-s", value = "string" },      # status of pkg
+    { name = "-L", value = "string" },      # list files in pkg
+    { name = "-S", value = "string" },      # search file → pkg
+    { name = "-p", value = "string" },      # detailed pkg info
+    { name = "-V", value = "string" },      # verify (read-only integrity check)
+    { name = "--verify", value = "string" },
+    { name = "--list", value = "none" },
+    { name = "--status", value = "string" },
+    { name = "--listfiles", value = "string" },
+]
+forbidden_flags = ["-i", "-r", "-P", "--install", "--remove", "--purge", "--unpack", "--configure"]
+
+# dpkg-query — non-mutating sibling to dpkg, used heavily on debian
+# IR for structured package data.
+[binary.dpkg-query]
+canonical_paths = ["/usr/bin/dpkg-query"]
+flags = [
+    { name = "-l", value = "none" },
+    { name = "-W", value = "string" },      # -W <pattern> = list packages by glob
+    { name = "-f", value = "string" },      # --showformat
+    { name = "--list", value = "none" },
+    { name = "--show", value = "string" },
+    { name = "--status", value = "string" },
+    { name = "--listfiles", value = "string" },
+]
 
 [binary.rpm]
 canonical_paths = ["/usr/bin/rpm", "/bin/rpm"]
-flags = [ { name = "-qa", value = "none" }, { name = "-qi", value = "string" }, { name = "-ql", value = "string" } ]
+flags = [
+    { name = "-qa", value = "none" },       # query all
+    { name = "-qi", value = "string" },     # query info
+    { name = "-ql", value = "string" },     # query file list
+    { name = "-qf", value = "fs_path" },    # query owner of file
+    { name = "-qR", value = "string" },     # requires
+    { name = "-qd", value = "string" },     # docs
+    { name = "-qc", value = "string" },     # config files
+    { name = "-V", value = "string" },      # verify
+    { name = "-Va", value = "none" },       # verify all
+    { name = "--query", value = "string" },
+    { name = "--queryformat", value = "string" },
+]
+forbidden_flags = ["-i", "-U", "-F", "-e", "--install", "--upgrade", "--freshen", "--erase"]
+
+# apt — Debian/Ubuntu package CLI.  Read-only verbs only.
+# `apt list --installed` and `apt show <pkg>` are the IR-essential ones.
+# install / remove / purge / update / upgrade / autoremove are excluded
+# by being absent from the subcommand allowlist.
+[binary.apt]
+canonical_paths = ["/usr/bin/apt"]
+subcommand_required = true
+subcommands = [
+    "list",
+    "list --installed",
+    "list --upgradable",
+    "list --manual-installed",
+    "show",
+    "policy",
+    "depends",
+    "rdepends",
+]
+flags = [
+    { name = "--installed",        value = "none" },
+    { name = "--upgradable",       value = "none" },
+    { name = "--manual-installed", value = "none" },
+    { name = "--all-versions",     value = "none" },
+    { name = "-a",                 value = "none" },
+]
+positional = { kind = "string", min = 0, max = 4 }
+
+# apt-cache — older form, still relevant on systems whose `apt` is
+# locked or where investigators prefer the lower-level interface.
+[binary.apt-cache]
+canonical_paths = ["/usr/bin/apt-cache"]
+subcommand_required = true
+subcommands = ["search", "show", "showpkg", "depends", "rdepends", "policy", "pkgnames", "stats"]
+positional = { kind = "string", min = 0, max = 4 }
+
+# snap — Canonical's snap CLI.  Read-only enumeration only.
+# install / remove / refresh / revert / disable / enable mutate state
+# and are excluded by being absent from the subcommand allowlist.
+[binary.snap]
+canonical_paths = ["/usr/bin/snap", "/snap/bin/snap"]
+subcommand_required = true
+subcommands = [
+    "list",
+    "list --all",
+    "info",
+    "find",
+    "connections",
+    "services",
+    "changes",
+    "interface",
+    "interfaces",
+    "warnings",
+    "version",
+    "whoami",
+    "model",
+    "known",
+]
+flags = [
+    { name = "--all",      value = "none" },
+    { name = "--unicode",  value = "string" },
+    { name = "--color",    value = "string" },
+    { name = "--name",     value = "string" },
+    { name = "--abs-time", value = "none" },
+]
+positional = { kind = "string", min = 0, max = 4 }
 
 [binary.brew]
 canonical_paths = ["/usr/local/bin/brew", "/opt/homebrew/bin/brew"]
@@ -228,6 +359,220 @@ flags = [
     { name = "-i", value = "string" }, { name = "-n", value = "none" },
     { name = "-P", value = "none"   }, { name = "-p", value = "uint"   },
     { name = "-u", value = "string" }, { name = "-c", value = "string" },
+    # Selection + output shaping for IR triage.
+    { name = "-a", value = "none"   }, { name = "-d", value = "string" },
+    { name = "-t", value = "none"   }, { name = "-F", value = "string" },
+    { name = "+D", value = "fs_path" },
+]
+
+# ============================================================================
+# Linux-IR sweep: session/user/log/network/service binaries.
+# ----------------------------------------------------------------------------
+# All read-only.  State-changing verbs are kept out via either subcommand
+# allowlisting, forbidden_flags, or absence of any positional/flag grammar
+# that would permit the destructive form.
+# ============================================================================
+
+# who — current login sessions (utmp).  Equivalent of `last`-but-live.
+[binary.who]
+canonical_paths = ["/usr/bin/who", "/bin/who"]
+flags = [
+    { name = "-a", value = "none" }, { name = "-b", value = "none" },
+    { name = "-d", value = "none" }, { name = "-H", value = "none" },
+    { name = "-l", value = "none" }, { name = "-p", value = "none" },
+    { name = "-q", value = "none" }, { name = "-r", value = "none" },
+    { name = "-s", value = "none" }, { name = "-t", value = "none" },
+    { name = "-T", value = "none" }, { name = "-u", value = "none" },
+]
+
+# w — current sessions plus what each is doing.
+[binary.w]
+canonical_paths = ["/usr/bin/w", "/bin/w"]
+flags = [
+    { name = "-h", value = "none" }, { name = "-s", value = "none" },
+    { name = "-i", value = "none" }, { name = "-f", value = "none" },
+    { name = "-u", value = "none" }, { name = "-o", value = "none" },
+    { name = "--no-header", value = "none" },
+]
+positional = { kind = "string", min = 0, max = 1 }
+
+# lastlog — most-recent login per user (siblings: last, lastb).
+[binary.lastlog]
+canonical_paths = ["/usr/bin/lastlog"]
+flags = [
+    { name = "-u", value = "string" }, { name = "-b", value = "uint" },
+    { name = "-t", value = "uint"   }, { name = "-C", value = "none" },
+]
+forbidden_flags = ["-S", "--set"]
+
+# getent — NSS lookups (passwd, group, hosts, services, shadow).
+# Essential for translating UIDs to logins, group memberships, and
+# resolving service ports without leaving the host.
+[binary.getent]
+canonical_paths = ["/usr/bin/getent", "/bin/getent"]
+subcommand_required = true
+subcommands = [
+    "passwd", "group", "hosts", "ahosts", "ahostsv4", "ahostsv6",
+    "services", "protocols", "networks", "shadow", "gshadow", "aliases",
+    "initgroups", "rpc", "ethers", "netgroup",
+]
+positional = { kind = "string", min = 0, max = 8 }
+
+# chage — password-aging info.  Only `-l` (list) is allowed; every
+# other flag mutates account state.
+[binary.chage]
+canonical_paths = ["/usr/bin/chage"]
+flags = [ { name = "-l", value = "none" } ]
+forbidden_flags = ["-d", "-E", "-I", "-m", "-M", "-W", "-R"]
+positional = { kind = "string", min = 1, max = 1 }
+
+# dmesg — kernel ring buffer.  Forbidden flags exclude --clear,
+# --console-off, --console-on; everything else is read-only.
+[binary.dmesg]
+canonical_paths = ["/usr/bin/dmesg", "/bin/dmesg"]
+flags = [
+    { name = "-T", value = "none" }, { name = "--ctime", value = "none" },
+    { name = "-k", value = "none" }, { name = "-u", value = "none" },
+    { name = "-x", value = "none" }, { name = "-r", value = "none" },
+    { name = "-H", value = "none" }, { name = "-w", value = "none" },
+    { name = "-l", value = "string" }, { name = "--level", value = "string" },
+    { name = "--since", value = "string" }, { name = "--until", value = "string" },
+    { name = "-f", value = "string" }, { name = "--facility", value = "string" },
+]
+forbidden_flags = ["-C", "--clear", "-c", "--read-clear", "-D", "--console-off", "-E", "--console-on", "-n", "--console-level"]
+
+# systemctl — read-only systemd queries.  `start`, `stop`, `restart`,
+# `reload`, `enable`, `disable`, `mask`, `unmask`, `daemon-reload`,
+# `kill`, `reset-failed`, `set-default` mutate state and are excluded
+# by absence from the subcommand allowlist.
+[binary.systemctl]
+canonical_paths = ["/bin/systemctl", "/usr/bin/systemctl"]
+subcommand_required = true
+subcommands = [
+    "status", "show", "cat", "list-units", "list-unit-files",
+    "list-timers", "list-sockets", "list-jobs", "list-dependencies",
+    "is-enabled", "is-active", "is-failed", "get-default",
+    "get-property", "environment", "list-machines",
+]
+flags = [
+    { name = "--no-pager",   value = "none" },
+    { name = "--all",        value = "none" },
+    { name = "-a",           value = "none" },
+    { name = "--full",       value = "none" },
+    { name = "-l",           value = "none" },
+    { name = "--type",       value = "string" },
+    { name = "-t",           value = "string" },
+    { name = "--state",      value = "string" },
+    { name = "--property",   value = "string" },
+    { name = "-p",           value = "string" },
+    { name = "--no-legend",  value = "none" },
+    { name = "-n",           value = "uint"   },
+    { name = "--user",       value = "none" },
+    { name = "--system",     value = "none" },
+]
+positional = { kind = "string", min = 0, max = 8 }
+
+# pgrep — process search by pattern.  Read-only.  pkill is a different
+# binary (NOT allowlisted) and the destructive flags here would only
+# work if pgrep accepted them, which it does not.
+[binary.pgrep]
+canonical_paths = ["/usr/bin/pgrep", "/bin/pgrep"]
+flags = [
+    { name = "-l", value = "none" }, { name = "-a", value = "none" },
+    { name = "-f", value = "none" }, { name = "-u", value = "string" },
+    { name = "-U", value = "string" }, { name = "-n", value = "none" },
+    { name = "-o", value = "none" }, { name = "-c", value = "none" },
+    { name = "-x", value = "none" }, { name = "-d", value = "string" },
+    { name = "-t", value = "string" }, { name = "-P", value = "uint" },
+]
+positional = { kind = "string", min = 0, max = 4 }
+
+# ip — Linux networking enumeration.  Only the explicit `show` forms are
+# admitted: bare `addr`, `link`, `route` etc. would still accept `add` /
+# `del` / `set` as positional args (the engine does not know those words
+# are verbs), leaking state-changing operations.  IR callers use
+# `ip addr show`, `ip route show`, etc.
+[binary.ip]
+canonical_paths = ["/usr/sbin/ip", "/sbin/ip", "/usr/bin/ip", "/bin/ip"]
+subcommand_required = true
+subcommands = [
+    "addr show",
+    "link show",
+    "route show",
+    "neigh show",
+    "rule show",
+    "tunnel show",
+    "maddr show",
+    "netns show",
+    "netns list",
+]
+flags = [
+    { name = "-4",   value = "none" }, { name = "-6",  value = "none" },
+    { name = "-br",  value = "none" }, { name = "-c",  value = "none" },
+    { name = "-o",   value = "none" }, { name = "-s",  value = "none" },
+    { name = "-d",   value = "none" }, { name = "-j",  value = "none" },
+    { name = "-p",   value = "none" }, { name = "-r",  value = "none" },
+    { name = "-n",   value = "none" },
+    { name = "dev",  value = "string" }, { name = "scope", value = "string" },
+]
+positional = { kind = "string", min = 0, max = 4 }
+
+# arp — ARP cache.  Read-only modes only (`-a` / `-n`).  Set / delete
+# modes (`-s`, `-d`) are excluded by forbidden_flags.
+[binary.arp]
+canonical_paths = ["/usr/sbin/arp", "/sbin/arp", "/usr/bin/arp"]
+flags = [
+    { name = "-a", value = "none" }, { name = "-n", value = "none" },
+    { name = "-v", value = "none" }, { name = "-e", value = "none" },
+    { name = "-D", value = "none" }, { name = "-i", value = "string" },
+]
+forbidden_flags = ["-d", "-s", "-f", "--delete", "--set", "--file"]
+
+# mount — bare invocation lists existing mounts (read-only).  Any
+# positional argument would attempt to mount, so we declare no
+# positional grammar; the engine rejects positional args with
+# unexpected_positional.
+[binary.mount]
+canonical_paths = ["/bin/mount", "/usr/bin/mount", "/sbin/mount"]
+flags = [
+    { name = "-l", value = "none" }, { name = "-v", value = "none" },
+    { name = "-t", value = "string" }, { name = "--show-labels", value = "none" },
+]
+
+# df — filesystem usage.  Read-only by construction.
+[binary.df]
+canonical_paths = ["/bin/df", "/usr/bin/df"]
+flags = [
+    { name = "-h", value = "none" }, { name = "-H", value = "none" },
+    { name = "-T", value = "none" }, { name = "-i", value = "none" },
+    { name = "-a", value = "none" }, { name = "-k", value = "none" },
+    { name = "-m", value = "none" }, { name = "-l", value = "none" },
+    { name = "-P", value = "none" }, { name = "-t", value = "string" },
+    { name = "-x", value = "string" }, { name = "--output", value = "string" },
+]
+positional = { kind = "fs_path", min = 0, max = 4, restrict_to_prefixes = ["/", "/etc", "/var", "/home", "/root", "/srv", "/snap", "/var/snap", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp"] }
+
+# du — directory size.  Read-only; like df.
+[binary.du]
+canonical_paths = ["/usr/bin/du", "/bin/du"]
+flags = [
+    { name = "-h", value = "none" }, { name = "-s", value = "none" },
+    { name = "-c", value = "none" }, { name = "-a", value = "none" },
+    { name = "-k", value = "none" }, { name = "-m", value = "none" },
+    { name = "-x", value = "none" }, { name = "-L", value = "none" },
+    { name = "-d", value = "uint" }, { name = "--max-depth", value = "uint" },
+    { name = "--exclude", value = "glob" },
+]
+positional = { kind = "fs_path", min = 1, max = 8, restrict_to_prefixes = ["/", "/etc", "/var", "/home", "/root", "/srv", "/snap", "/var/snap", "/Users", "/private", "/Applications", "/Library", "/opt", "/usr", "/tmp"] }
+
+# free — memory snapshot.
+[binary.free]
+canonical_paths = ["/usr/bin/free", "/bin/free"]
+flags = [
+    { name = "-h", value = "none" }, { name = "-b", value = "none" },
+    { name = "-k", value = "none" }, { name = "-m", value = "none" },
+    { name = "-g", value = "none" }, { name = "-w", value = "none" },
+    { name = "-t", value = "none" }, { name = "--si", value = "none" },
 ]
 
 [binary.dscl]
@@ -670,7 +1015,8 @@ canonical_paths = [
 ]
 positional = { kind = "fs_path", min = 1, max = 4, restrict_to_prefixes = [
     "/etc", "/var", "/proc", "/sys", "/Users", "/private",
-    "/Applications", "/Library", "/opt", "/usr", "/tmp", "/home",
+    "/Applications", "/Library", "/opt", "/usr", "/tmp",
+    "/home", "/root", "/srv", "/snap", "/var/snap",
     "C:/Users", "C:/ProgramData", "/c/Users", "/c/ProgramData",
 ] }
 flags = [
