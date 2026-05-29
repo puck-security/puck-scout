@@ -35,6 +35,17 @@ type Agent struct {
 	// give the LLM a target_os hint up front so it can skip the
 	// uname-discovery turn.
 	OS string
+	// Version is the agent's semver (CARGO_PKG_VERSION), reported on
+	// every poll / SSE-connect via the `version` query param; "" for
+	// agents predating the field.  Surfaced fleet-wide by
+	// puck_investigate (agent_versions) so operators can spot drift or
+	// a known-bad build without executing a command on each host.
+	Version string
+	// Commit is the short git SHA the agent was built from, reported
+	// via the `commit` query param; "" when unknown (non-git build) or
+	// for agents predating the field.  Pairs with Version to identify
+	// the exact build.
+	Commit string
 }
 
 // Registry is an in-memory registry of known agents.
@@ -112,6 +123,28 @@ func (r *Registry) RecordOS(hostname, os string) {
 	}
 }
 
+// RecordBuild records the agent's reported build identity (semver +
+// short git commit).  Called from the agent-facing handlers when the
+// agent passes ?version=<semver>&commit=<sha>.  No-op if both are empty
+// (older agents) or the agent is unknown — caller Touch's first.  Each
+// field updates independently: a report carrying only a version won't
+// clobber a previously-recorded commit, and vice versa.
+func (r *Registry) RecordBuild(hostname, version, commit string) {
+	if version == "" && commit == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if a, ok := r.agents[hostname]; ok {
+		if version != "" {
+			a.Version = version
+		}
+		if commit != "" {
+			a.Commit = commit
+		}
+	}
+}
+
 // OS returns the last-reported OS for hostname, or "" if unknown.
 // O(1) read for the puck_investigate hint path.
 func (r *Registry) OS(hostname string) string {
@@ -156,6 +189,8 @@ func (r *Registry) ActiveAgents() []Agent {
 				Status:       status,
 				PolicyDigest: a.PolicyDigest,
 				OS:           a.OS,
+				Version:      a.Version,
+				Commit:       a.Commit,
 			})
 		}
 	}

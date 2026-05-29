@@ -5,10 +5,31 @@ import (
 	"fmt"
 	"path/filepath"
 
+	"github.com/puck-security/puck-scout/mcp/internal/agents"
 	"github.com/puck-security/puck-scout/mcp/internal/audit"
 	"github.com/puck-security/puck-scout/mcp/internal/investigation"
 	"github.com/puck-security/puck-scout/mcp/internal/mcp"
 )
+
+// agentVersionMap builds the hostname→version display map exposed by
+// puck_investigate as agent_versions, mirroring agent_os.  The value is
+// the agent's semver, suffixed with "+<commit>" when the agent reported
+// a build commit.  Hosts that haven't reported a version (agents that
+// predate the field) are omitted so the map carries only positive signal.
+func agentVersionMap(active []agents.Agent) map[string]string {
+	m := make(map[string]string, len(active))
+	for _, a := range active {
+		if a.Version == "" {
+			continue
+		}
+		v := a.Version
+		if a.Commit != "" {
+			v += "+" + a.Commit
+		}
+		m[a.Hostname] = v
+	}
+	return m
+}
 
 // handleInvestigate creates a new investigation, sets up directories and audit
 // logging, and returns context to guide the LLM through the investigation.
@@ -66,6 +87,10 @@ func (r *Router) handleInvestigate(args map[string]any) mcp.ToolCallResult {
 			agentOS[a.Hostname] = a.OS
 		}
 	}
+	// agent_versions surfaces deployed agent builds (semver[+commit])
+	// fleet-wide, mirroring agent_os — so version drift / known-bad
+	// builds are visible up front without a per-host command.
+	agentVersions := agentVersionMap(activeAgents)
 
 	// Build skill context if a skill was requested. OverviewContext
 	// includes only the sections needed to START the investigation —
@@ -93,6 +118,7 @@ func (r *Router) handleInvestigate(args map[string]any) mcp.ToolCallResult {
 		"connected_agents": agentNames,
 		"agent_count":      len(agentNames),
 		"agent_os":         agentOS,
+		"agent_versions":   agentVersions,
 		"max_turns":        inv.MaxTurns,
 		"max_commands":     inv.MaxCommands,
 		"pathfinder_hint":  pathfinderHint,
