@@ -211,6 +211,8 @@ required_commands:
   - ss
   - dpkg
   - rpm
+  - pgrep
+  - "systemctl status"
   - "brew list"
   - "aws sts get-caller-identity"
   # Windows-native escape hatch — OS-adaptation paragraph mentions these.
