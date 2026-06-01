@@ -129,7 +129,7 @@ pub async fn run(config: AgentConfig) -> Result<()> {
     // version + commit identify which build of the agent is running so the
     // server can surface it fleet-wide (puck_investigate agent_versions)
     // without executing `puck-agent --version` on every host.
-    let version = env!("CARGO_PKG_VERSION");
+    let version = env!("PUCK_AGENT_VERSION");
     let commit = build_commit();
     let query = agent_query(&agent_id, policy_digest, os, version, commit);
     let poll_url = format!("{}/v1/poll?{}", config.mcp_server, query);
