@@ -368,6 +368,81 @@ The agent config is at `~/.config/puck-agent/puck-agent.yaml` (or
 
 ---
 
+## Upgrading Puck
+
+`puck-agent` and `puck-mcp` are **versioned together** — the CSR key algorithm, the policy grammar, and several wire types change across versions, and there is no protocol negotiation. Always run **matching versions** on both sides. The binaries attached to a single [GitHub release](https://github.com/puck-security/puck-scout/releases/latest) are built from the same commit and are guaranteed to match; the usual way to break a deployment is to pair a release-vintage server with a locally-built agent (or vice versa). If you hit a version-skew rejection, see the Troubleshooting entry on [enrollment `400 … csr key algorithm`](#troubleshooting).
+
+The good news: an in-place upgrade is just **swap the binary and restart**. Enrollment material — the agent's `cert.pem` / `cert-key.pem` / `ca.pem` and the server's CA — lives on disk, survives the upgrade, and is *not* tied to the binary. Moving to a new version never requires re-enrolling agents.
+
+### Upgrade the MCP server (operator host)
+
+```bash
+# 1. Download the new release binary for your platform + the checksums.
+#    (See Step 0 for the platform → asset-name table.)
+curl -fsSLO https://github.com/puck-security/puck-scout/releases/latest/download/puck-mcp-<os>-<arch>
+curl -fsSLO https://github.com/puck-security/puck-scout/releases/latest/download/SHA256SUMS
+shasum -a 256 --ignore-missing -c SHA256SUMS      # must print "puck-mcp-<os>-<arch>: OK"
+
+# 2. macOS only: strip quarantine/provenance so ASP doesn't block the new inode.
+xattr -d com.apple.quarantine puck-mcp-darwin-* 2>/dev/null
+xattr -d com.apple.provenance puck-mcp-darwin-* 2>/dev/null
+
+# 3. Install over the old binary with install(1), NOT cp (see Step 0 for why).
+install -m 0755 puck-mcp-<os>-<arch> "$(command -v puck-mcp)"
+
+# 4. Restart so the new binary is running:
+#    - stdio mode (Claude Code spawns puck-mcp): just restart Claude Code.
+#    - standalone/daemon: restart the service (or stop + re-run).
+```
+
+On restart, `puck-mcp` **reuses the CA and server cert already on disk** — it only generates a fresh CA when both halves are missing. Enrolled agents pin the CA (not the leaf cert), so they keep trusting the upgraded server with no action on the endpoint. Confirm with `puck-mcp status`, which prints the running version, listeners, cert SANs, and the enrolled-agent list.
+
+> If you ran a standalone `puck-mcp` only to mint bootstrap tokens during enrollment, stop it once the fleet is enrolled — leaving it bound to port 50281 prevents Claude Code's stdio `puck-mcp` from binding. See the Troubleshooting entry on zero `connected_agents`.
+
+### Upgrade an agent (endpoint)
+
+Re-run the same install path you used to enroll — it is idempotent:
+
+```bash
+# Drop in the new release binary (verify against SHA256SUMS as above), then:
+install -m 0755 puck-agent-<os>-<arch> "$(command -v puck-agent)"
+sudo systemctl restart puck-agent          # Linux service
+# macOS:  launchctl kickstart -k gui/$(id -u)/io.puck.agent   (system/io.puck.agent for a root install)
+```
+
+`puck-agent enroll` is a **no-op when a valid cert already exists** (it prints `already enrolled and cert is valid; skipping`), so re-running `install-agent.sh` won't disturb a working enrollment — it just lands the new binary. **Restarting the service after the binary changes is what makes the upgrade take effect.** For fleets, drive this with the same mechanism you used in [Multiple hosts](#multiple-hosts-fleet-enrollment) (Ansible, an SSH loop, MDM).
+
+### Verify the upgrade
+
+The published checksum is the authoritative check — the version string is convenience, the SHA is proof:
+
+```bash
+shasum -a 256 "$(command -v puck-agent)"   # compare against SHA256SUMS for the target release
+puck-agent --version                       # quick check — prints the version (+ build commit)
+```
+
+Fleet-wide, `puck_investigate` reports each host's running build under `agent_versions`, so you can spot a straggler without touching every endpoint.
+
+### Does an upgrade need re-enrollment?
+
+A version upgrade never does. Re-enrollment is forced only by changes to the **CA** (which agents pin) — not by new binaries, and not by server-cert or SAN changes:
+
+| Operation | CA preserved? | Re-enroll agents? |
+|---|---|---|
+| Agent binary upgrade | yes | **No** — swap binary + restart |
+| MCP server binary upgrade | yes | **No** — CA + server cert reused on restart |
+| Server cert renewal (`puck-mcp rotate-server-cert`) | yes | **No** — agents pin the CA, not the leaf |
+| Server IP / hostname change (add a SAN) | yes | **No** — [operations.md → reachability changes](operations.md#server-reachability-changes-ip-or-hostname-change) |
+| Agent cert near expiry | yes | **No** — `enroll` re-issues against the same CA automatically |
+| **CA rotation** | **no — new CA** | **Yes, every endpoint** — [operations.md → CA rotation](operations.md#ca-rotation) |
+| **Lost `ca.pem` or `ca-key.pem`** | **no** | **Yes, every endpoint** — [operations.md → PKI Recovery](operations.md#pki-recovery) |
+
+### Rollback
+
+Rollback is the same procedure aimed at an older release: install the previous release's **agent and server** binaries (keep them matched to the same version) and restart. Because enrollment material is untouched, agents reconnect to the rolled-back server without re-enrolling — as long as you move both sides together.
+
+---
+
 ## Diagnostics
 
 When anything seems off, two commands cover everything:
