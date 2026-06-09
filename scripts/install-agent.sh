@@ -194,7 +194,10 @@ if [[ ! -x "$PUCK_AGENT_BIN" ]] && [[ "$DOWNLOAD_BINARY" -eq 1 ]]; then
         _SUMS_FILE="$(mktemp -t puck-sums.XXXXXX)"
         trap 'rm -f "$_SUMS_FILE"' EXIT
         if curl -fsSL --retry 2 --output "$_SUMS_FILE" "$_SUMS_URL"; then
-            _EXPECTED=$(awk -v f="$_BINARY_NAME" '$2 == f {print $1; exit}' "$_SUMS_FILE")
+            # SHA256SUMS lists assets with a leading "./" (e.g. "./puck-agent-linux-amd64"),
+            # so strip it before matching the bare asset name; otherwise $2 never equals
+            # "$_BINARY_NAME" and every install aborts with "not listed in SHA256SUMS".
+            _EXPECTED=$(awk -v f="$_BINARY_NAME" '{sub(/^\.\//, "", $2)} $2 == f {print $1; exit}' "$_SUMS_FILE")
             if [[ -z "$_EXPECTED" ]]; then
                 echo "ERROR: $_BINARY_NAME not listed in SHA256SUMS --refusing to install." >&2
                 rm -f "$_BIN_PATH"
