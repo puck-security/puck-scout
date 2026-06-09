@@ -78,6 +78,37 @@ fn canonical_os() -> &'static str {
     }
 }
 
+/// Short git commit the agent was built from, or "" when unknown.
+/// Captured at build time by build.rs via cargo:rustc-env=PUCK_AGENT_COMMIT.
+/// option_env! yields None for builds where build.rs couldn't read git
+/// (e.g. a source tarball with no .git), in which case the agent reports
+/// no commit rather than a bogus placeholder.
+fn build_commit() -> &'static str {
+    option_env!("PUCK_AGENT_COMMIT").unwrap_or("")
+}
+
+/// Build the query string shared by the /v1/poll and /v1/events URLs.
+/// agent_id, policy_digest and os are the existing identity/metadata
+/// params; version + commit let the server surface deployed agent builds
+/// fleet-wide (puck_investigate agent_versions) without executing a
+/// command on each host.  commit is omitted when empty so the server
+/// records no placeholder.  Sent as two params rather than a "+"-joined
+/// string because a literal '+' in a query decodes to a space server-side.
+fn agent_query(
+    agent_id: &str,
+    policy_digest: &str,
+    os: &str,
+    version: &str,
+    commit: &str,
+) -> String {
+    let mut q =
+        format!("agent_id={agent_id}&policy_digest={policy_digest}&os={os}&version={version}");
+    if !commit.is_empty() {
+        q.push_str(&format!("&commit={commit}"));
+    }
+    q
+}
+
 pub async fn run(config: AgentConfig) -> Result<()> {
     let client = build_client(&config).context("failed to build mTLS HTTP client")?;
     // Agent identity is the mTLS cert CN.  The query-string agent_id is
@@ -95,14 +126,14 @@ pub async fn run(config: AgentConfig) -> Result<()> {
     // "windows".  Anything else maps through to std::env::consts::OS
     // verbatim (e.g. "freebsd") — server stores whatever we report.
     let os = canonical_os();
-    let poll_url = format!(
-        "{}/v1/poll?agent_id={}&policy_digest={}&os={}",
-        config.mcp_server, agent_id, policy_digest, os
-    );
-    let events_url = format!(
-        "{}/v1/events?agent_id={}&policy_digest={}&os={}",
-        config.mcp_server, agent_id, policy_digest, os
-    );
+    // version + commit identify which build of the agent is running so the
+    // server can surface it fleet-wide (puck_investigate agent_versions)
+    // without executing `puck-agent --version` on every host.
+    let version = env!("PUCK_AGENT_VERSION");
+    let commit = build_commit();
+    let query = agent_query(&agent_id, policy_digest, os, version, commit);
+    let poll_url = format!("{}/v1/poll?{}", config.mcp_server, query);
+    let events_url = format!("{}/v1/events?{}", config.mcp_server, query);
     let results_url = format!("{}/v1/results", config.mcp_server);
 
     let cert_pem_bytes =
@@ -649,6 +680,33 @@ mod tests {
         // able to take down the agent.
         let event = "event: command\ndata: this-is-not-valid-json";
         assert!(parse_sse_command(event).is_none());
+    }
+
+    // ─── agent_query: shared poll/events query string ───────────────────
+    // The agent reports identity + build metadata as query params on every
+    // poll / SSE-connect.  version lets the server surface deployed builds
+    // fleet-wide (puck_investigate agent_versions); commit pins the exact
+    // build but is omitted when unknown so the server records no placeholder.
+    // Two separate params (not "version+commit") because a literal '+' in a
+    // query string decodes to a space on the Go side.
+
+    #[test]
+    fn agent_query_includes_version_and_commit() {
+        let q = agent_query("host1", "deadbeef", "linux", "0.2.0", "abc1234");
+        assert_eq!(
+            q,
+            "agent_id=host1&policy_digest=deadbeef&os=linux&version=0.2.0&commit=abc1234"
+        );
+    }
+
+    #[test]
+    fn agent_query_omits_commit_when_unknown() {
+        let q = agent_query("host1", "deadbeef", "linux", "0.2.0", "");
+        assert_eq!(
+            q,
+            "agent_id=host1&policy_digest=deadbeef&os=linux&version=0.2.0"
+        );
+        assert!(!q.contains("commit="));
     }
 
     #[test]

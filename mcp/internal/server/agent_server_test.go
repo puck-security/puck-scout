@@ -247,6 +247,52 @@ func TestPollRegistersAgent(t *testing.T) {
 	}
 }
 
+// TestPollRecordsBuildInfo verifies that /v1/poll records the agent's
+// reported version + commit into the registry (the fleet-wide
+// agent_versions source), mirroring how ?os= is recorded.
+func TestPollRecordsBuildInfo(t *testing.T) {
+	srv, registry, _ := testServer(t)
+	handler := srv.Handler()
+
+	req := mtlsRequest(http.MethodGet, "/v1/poll?agent_id=agent1&version=0.2.0&commit=abc1234", "host-bi", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", w.Code)
+	}
+	active := registry.ActiveAgents()
+	if len(active) != 1 {
+		t.Fatalf("expected 1 active agent, got %d", len(active))
+	}
+	if active[0].Version != "0.2.0" || active[0].Commit != "abc1234" {
+		t.Errorf("recorded build = %q/%q, want 0.2.0/abc1234", active[0].Version, active[0].Commit)
+	}
+}
+
+// TestEventsRecordsBuildInfo verifies that opening /v1/events records the
+// agent's reported version + commit into the registry before the stream
+// loop, same as ?os=.
+func TestEventsRecordsBuildInfo(t *testing.T) {
+	srv, registry, _ := testServer(t)
+	handler := srv.Handler()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	req := mtlsRequest(http.MethodGet, "/v1/events?agent_id=agent1&version=0.2.0&commit=def5678", "host-sse-bi", nil)
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	active := registry.ActiveAgents()
+	if len(active) != 1 {
+		t.Fatalf("expected 1 active agent, got %d", len(active))
+	}
+	if active[0].Version != "0.2.0" || active[0].Commit != "def5678" {
+		t.Errorf("recorded build = %q/%q, want 0.2.0/def5678", active[0].Version, active[0].Commit)
+	}
+}
+
 // TestPollNoCertRejected verifies that /v1/poll without a client cert is rejected (401).
 // Bearer auth on the agent listener is gone; mTLS is the only auth mechanism.
 func TestPollNoCertRejected(t *testing.T) {

@@ -106,6 +106,7 @@ func (s *AgentServer) handlePoll(w http.ResponseWriter, r *http.Request) {
 	}
 	s.registry.RecordPolicyDigest(hostname, r.URL.Query().Get("policy_digest"))
 	s.registry.RecordOS(hostname, r.URL.Query().Get("os"))
+	s.registry.RecordBuild(hostname, r.URL.Query().Get("version"), r.URL.Query().Get("commit"))
 
 	cmds := s.queue.Drain(hostname)
 	if len(cmds) == 0 {
@@ -226,6 +227,7 @@ func (s *AgentServer) handleEvents(w http.ResponseWriter, r *http.Request) {
 	s.registry.Touch(hostname, agentID)
 	s.registry.RecordPolicyDigest(hostname, r.URL.Query().Get("policy_digest"))
 	s.registry.RecordOS(hostname, r.URL.Query().Get("os"))
+	s.registry.RecordBuild(hostname, r.URL.Query().Get("version"), r.URL.Query().Get("commit"))
 	s.logger.Info("agent SSE connected", "hostname", hostname, "agent_id", agentID)
 
 	w.Header().Set("Content-Type", "text/event-stream")

@@ -87,6 +87,43 @@ func TestRecordOSAndQuery(t *testing.T) {
 	}
 }
 
+func TestRecordBuildAndQuery(t *testing.T) {
+	r := NewRegistry(60)
+	// RecordBuild on an unknown host is a silent no-op — it must not
+	// register the host (caller Touch's first, mirroring RecordOS).
+	r.RecordBuild("nobody", "0.2.0", "abc1234")
+	if active := r.ActiveAgents(); len(active) != 0 {
+		t.Fatalf("RecordBuild on unknown host must not register it; got %d agents", len(active))
+	}
+	// Touch first, then record version + commit.
+	r.Touch("host-a", "agent-a")
+	r.RecordBuild("host-a", "0.2.0", "abc1234")
+	active := r.ActiveAgents()
+	if len(active) != 1 {
+		t.Fatalf("ActiveAgents len = %d, want 1", len(active))
+	}
+	if active[0].Version != "0.2.0" {
+		t.Errorf("Version = %q, want 0.2.0", active[0].Version)
+	}
+	if active[0].Commit != "abc1234" {
+		t.Errorf("Commit = %q, want abc1234", active[0].Commit)
+	}
+	// A fully-empty report is ignored (older agents that don't report the
+	// field) — prior values must remain unchanged.
+	r.RecordBuild("host-a", "", "")
+	active = r.ActiveAgents()
+	if active[0].Version != "0.2.0" || active[0].Commit != "abc1234" {
+		t.Errorf("after empty record = %q/%q, want 0.2.0/abc1234 (unchanged)", active[0].Version, active[0].Commit)
+	}
+	// A partial report (version, no commit) updates version without
+	// clobbering a previously-reported commit.
+	r.RecordBuild("host-a", "0.3.0", "")
+	active = r.ActiveAgents()
+	if active[0].Version != "0.3.0" || active[0].Commit != "abc1234" {
+		t.Errorf("after partial record = %q/%q, want 0.3.0/abc1234", active[0].Version, active[0].Commit)
+	}
+}
+
 func TestRegistryStaleExcludedFromActiveAgents(t *testing.T) {
 	r := NewRegistry(10) // 10s stale timeout
 

@@ -15,7 +15,16 @@ mod types;
 
 /// Puck endpoint agent — read-only command executor for autonomous endpoint investigation.
 #[derive(Parser, Debug)]
-#[command(name = "puck-agent", version, about)]
+// version/long_version come from build.rs (PUCK_AGENT_VERSION is the release
+// tag when built in CI, else the crate version; the long form appends the
+// short commit). This keeps `puck-agent --version` honest even if Cargo.toml
+// lags a release tag — the bug that shipped v0.2.0 self-reporting "0.1.0".
+#[command(
+    name = "puck-agent",
+    version = env!("PUCK_AGENT_VERSION"),
+    long_version = env!("PUCK_AGENT_LONG_VERSION"),
+    about
+)]
 struct Cli {
     #[command(subcommand)]
     command: Cmd,
@@ -232,7 +241,7 @@ async fn serve(config_path: &std::path::Path) -> anyhow::Result<()> {
     tracing::info!(
         hostname = %config.hostname,
         mcp_server = %config.mcp_server,
-        version = env!("CARGO_PKG_VERSION"),
+        version = env!("PUCK_AGENT_VERSION"),
         "puck-agent starting"
     );
 
