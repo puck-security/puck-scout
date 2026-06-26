@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"regexp"
+	"strings"
 )
 
 type ctxKey int
@@ -43,7 +44,16 @@ func requireMTLSIdentity(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "cert CN/SAN mismatch", http.StatusUnauthorized)
 			return
 		}
-		hostname := cert.Subject.CommonName
+		// Canonicalise to lowercase: DNS hostnames are case-insensitive
+		// (RFC 4343), and the URL/TLS layers around us fold case already.
+		// This is THE authoritative identity for agent-facing handlers, so
+		// lowercasing here makes the registry, command queue, and per-host
+		// delivery authz case-insensitive without each call site repeating it
+		// — and it keeps agents already enrolled with mixed-case certs working
+		// (no re-enroll needed).  The exact CN==SAN check above stays as a
+		// cert well-formedness guard; this only canonicalises the identity
+		// string we hand downstream.
+		hostname := strings.ToLower(cert.Subject.CommonName)
 		if !ValidHostnameRegex.MatchString(hostname) {
 			http.Error(w, "invalid hostname in cert", http.StatusUnauthorized)
 			return

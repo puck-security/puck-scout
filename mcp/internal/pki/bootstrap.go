@@ -60,6 +60,11 @@ func OpenTokenLedger(path string) (*TokenLedger, error) {
 }
 
 func (l *TokenLedger) Issue(hostname string, ttl time.Duration) (*BootstrapToken, error) {
+	// Bind the token to the canonical (lowercase) hostname.  Hostname identity
+	// is case-insensitive everywhere else (see server/identity.go), so storing
+	// the binding canonically keeps it consistent with the cert-derived
+	// hostname the enrollment handler validates against.
+	hostname = strings.ToLower(hostname)
 	raw := make([]byte, bootstrapTokenRandomBytes)
 	if _, err := io.ReadFull(rand.Reader, raw); err != nil {
 		return nil, err
@@ -106,7 +111,10 @@ func (l *TokenLedger) Validate(plaintext, requestHostname string) error {
 		if time.Now().After(rec.ExpiresAt) {
 			return ErrTokenExpired
 		}
-		if rec.Hostname != requestHostname {
+		// EqualFold: hostname identity is case-insensitive (see
+		// server/identity.go).  Issue() now stores the binding lowercased, but
+		// a record written before this change may be mixed-case — fold both.
+		if !strings.EqualFold(rec.Hostname, requestHostname) {
 			return ErrTokenHostMismatch
 		}
 		return nil
@@ -174,7 +182,10 @@ func (l *TokenLedger) ValidateAndSpend(plaintext, requestHostname string) error 
 		if now.After(rec.ExpiresAt) {
 			return ErrTokenExpired
 		}
-		if rec.Hostname != requestHostname {
+		// EqualFold: hostname identity is case-insensitive (see
+		// server/identity.go).  Issue() now stores the binding lowercased, but
+		// a record written before this change may be mixed-case — fold both.
+		if !strings.EqualFold(rec.Hostname, requestHostname) {
 			return ErrTokenHostMismatch
 		}
 		records[i].SpentAt = &now
