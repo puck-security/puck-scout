@@ -39,7 +39,7 @@
      └─────────┘   └─────────┘   └─────────┘   write to disk.
 ```
 
-**Investigation flow**: pathfinder (check one host, learn the environment) --> checkpoint (show the engineer what you found, propose a fleet plan) --> fleet (fan out to relevant hosts) --> iterate (follow leads on affected hosts) --> analyze (write the report with containment recommendations) --> save (persist to `investigations/`).
+**Investigation flow**: pathfinder → checkpoint → fleet → iterate → analyze → save (persisted to `investigations/`). See [Architecture](docs/architecture.md) for what each stage does.
 
 ## MCP Tools
 
@@ -75,7 +75,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/puck-security/puck-scout/mai
 
 This generates a CA, server cert, and config. If the `claude` CLI is installed, it auto-registers Puck as an MCP server — no manual config needed. Otherwise it prints the command to register manually.
 
-> **If your MCP host might roam between networks** (laptop, dynamic IP), pick a stable name first — Tailscale / DDNS / static hostname — and pass it as `--hostname`. See [Getting Started](docs/getting-started.md). If you already enrolled agents and your address changes, `puck-mcp rotate-server-cert --add-san <new-name-or-ip>` fixes it without re-enrolling them.
+> **Roaming MCP host** (laptop, dynamic IP)? Pass a stable `--hostname` (Tailscale / DDNS / static) so agents don't lose the server — see [Getting Started](docs/getting-started.md). If the address changes after enrollment, `puck-mcp rotate-server-cert --add-san <name-or-ip>` fixes it without re-enrolling.
 
 **2. Enroll an endpoint**
 
@@ -83,10 +83,7 @@ This generates a CA, server cert, and config. If the `claude` CLI is installed, 
 # On the server: generate a one-time bootstrap token
 puck-mcp generate-bootstrap-token --hostname eng-laptop-47
 
-# On the endpoint: install the agent and enroll.
-# `read -rs` keeps the token out of shell history; `mktemp` + 0600 keeps
-# it off other users' reach.  See docs/getting-started.md for the full
-# leak-resistant pattern.
+# On the endpoint: install + enroll (token-safe pattern; full details in docs/getting-started.md):
 TF=$(mktemp /tmp/puck-bt.XXXXXX) && chmod 600 "$TF"
 printf 'Paste puck-bt-… (hidden): '; read -rs T; echo; printf '%s' "$T" > "$TF"; unset T
 bash <(curl -fsSL https://raw.githubusercontent.com/puck-security/puck-scout/main/scripts/install-agent.sh) \

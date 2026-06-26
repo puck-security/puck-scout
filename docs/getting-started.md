@@ -42,13 +42,7 @@ Download prebuilt binaries from [GitHub releases](https://github.com/puck-securi
 | Windows x86\_64 | `puck-mcp-windows-amd64.exe` | `puck-agent-windows-amd64.exe` |
 | Windows arm64 | `puck-mcp-windows-arm64.exe` | `puck-agent-windows-arm64.exe` |
 
-Windows release binaries are built by CI using the MSVC toolchain
-(`aarch64-pc-windows-msvc` for arm64, `x86_64-pc-windows-msvc` for amd64)
-and are fully self-contained — no `libunwind.dll` or any other runtime
-DLL bundling required.  The libunwind warning in the build-from-source
-section only applies to local cross-compiles from macOS via llvm-mingw
-(the `gnullvm` target).  If you're installing a released binary, ignore
-the libunwind note entirely.
+Windows release binaries use the MSVC toolchain and are fully self-contained — no `libunwind.dll` or other runtime DLLs. (The libunwind note under [Building from Source](#building-from-source) applies only to local llvm-mingw cross-compiles on macOS — ignore it for released binaries.)
 
 **Install with `install(1)`, not `cp`.** On macOS Sequoia, files copied with
 `cp` inherit a provenance attribute that Apple Security Policy can use to
@@ -89,9 +83,13 @@ already spent, wrong hostname).
 
 #### First — choose a deployment pattern
 
-Agents reach the MCP server via the hostname or IP you bake into their config at enrollment, and TLS-verify against the server cert's SAN list. **If that address changes (laptop roams to a new network, home server's public IP rotates), agents lose connectivity.** Pick a pattern below before running `setup-mcp.sh` so you don't have to re-roll later. The new `puck-mcp rotate-server-cert` subcommand (see [operations.md](operations.md#server-reachability-changes-ip-or-hostname-change)) lets you add SANs without re-enrolling agents, but the cleanest answer is to pick a stable name up front.
+Agents pin the MCP server's address (hostname or IP) at enrollment and TLS-verify it against the server cert's SANs, so **if that address changes, agents lose connectivity.** `puck-mcp rotate-server-cert` can add SANs later without re-enrolling (see [operations.md](operations.md#server-reachability-changes-ip-or-hostname-change)), but it's cleanest to pick a stable pattern now:
 
-- **Mesh-networked operator host (recommended for laptops).** Run [Tailscale](https://tailscale.com/) (or WireGuard / ZeroTier / Nebula). Each device gets a stable address (`100.x.y.z`) and a stable MagicDNS name (`<machine>.<tailnet>.ts.net`) that survives any underlying network change. Pass the mesh hostname as `--hostname` and include both the hostname and the mesh IP in `--server-cert-sans`. Enrolled agents follow you between home, office, and hotel without any reconfiguration.
+- **Mesh-networked operator host (recommended for laptops).** Run [Tailscale](https://tailscale.com/) (or WireGuard / ZeroTier / Nebula): each device gets a stable address + MagicDNS name that survives any network change. Pass the mesh name as `--hostname` and the name + IP in `--server-cert-sans`:
+  ```bash
+  bash setup-mcp.sh --hostname mybox.tail-abc123.ts.net \
+                    --server-cert-sans mybox.tail-abc123.ts.net,100.64.0.5,127.0.0.1,::1
+  ```
 - **DDNS for a home server with dynamic public IP.** Use `ddclient` (or a router-builtin) against duckdns.org, he.net, Cloudflare, etc. Pass the DDNS hostname as `--hostname` and `--server-cert-sans`. Agents resolve the current public IP on every reconnect — DNS handles the rotation.
 - **Static IP/hostname for ops boxes.** A VPS, homelab box, or any always-on host with stable addressing. Pass the hostname or IP directly. This is the implicit assumption if you don't think about it; only safe when the address really doesn't change.
 - **mDNS `<host>.local` for same-LAN testing.** macOS Bonjour and Windows mDNSResponder advertise `<host>.local` on the local broadcast domain. Get the name from `scutil --get LocalHostName` (macOS) or `hostname` (Linux/Windows) and pass it as both `--hostname` and `--server-cert-sans`. Stable across LAN-local IP changes; does not traverse subnets, NAT, or VPNs. Useful for quick tests with a VM on the same LAN — not suitable for fleet ops.
@@ -105,15 +103,6 @@ If you're not sure, pick the mesh pattern. Tailscale has a free personal tier, w
 ```bash
 curl -fsSL https://github.com/puck-security/puck-scout/releases/latest/download/setup-mcp.sh | \
   bash -s -- --hostname puck-mcp.internal
-```
-
-For the mesh / DDNS patterns, pass both the stable name and any extra addresses you want covered:
-
-```bash
-# Tailscale example
-curl -fsSL https://github.com/puck-security/puck-scout/releases/latest/download/setup-mcp.sh | \
-  bash -s -- --hostname mybox.tail-abc123.ts.net \
-              --server-cert-sans mybox.tail-abc123.ts.net,100.64.0.5,127.0.0.1,::1
 ```
 
 The script:
@@ -178,8 +167,6 @@ curl -fsSL https://github.com/puck-security/puck-scout/releases/latest/download/
 shred -u "$TOKEN_FILE" 2>/dev/null || rm -f "$TOKEN_FILE"
 ```
 
-The token never appears on argv, never goes into `$HISTFILE`, never echoes to the tty. `mktemp` plus `chmod 600` keeps it out of other users' reach for the few seconds it's on disk.
-
 **For automated enrollment (no human in the loop), pipe the token directly from the MCP host over SSH:**
 
 ```bash
@@ -191,9 +178,7 @@ puck-mcp generate-bootstrap-token --hostname eng-laptop-47 --ttl 1h | \
     shred -u "$TF" 2>/dev/null || rm -f "$TF"'
 ```
 
-> **Why not just `--token-stdin <<< "puck-bt-…"`?** That here-string DOES put the token in shell history on most setups (`HISTCONTROL=ignorespace` only suppresses it if you remember to prefix the line with a space; many distros don't enable that by default). And it shows up in `ps` for the duration of the command. The `read -rs` + tempfile pattern above avoids both. If you accept that risk (lab, CI), `--token-stdin` is still supported — just be aware of the history exposure.
->
-> **Why not `--token-stdin` via `curl | bash`?** When a script is piped via `curl | bash`, bash's stdin is already consumed by the script body — `read` inside the script gets empty data. Use `--token-file` for the curl-pipe-to-bash pattern, or download the script first then use stdin.
+> **Why not `--token-stdin <<< "puck-bt-…"`?** A here-string lands in shell history unless `HISTCONTROL=ignorespace` is set (not the default) and shows up in `ps`. It also can't work when the install script is piped via `curl | bash` — bash's stdin is the script body, so `read` gets nothing. Use `--token-file` (or download the script first, then stdin); `--token-stdin` is fine for lab/CI if you accept the history exposure.
 
 The script requires `puck-agent` to be on `PATH` on the endpoint (or set `PUCK_AGENT_BIN=/absolute/path/to/puck-agent`). Pass `--download-binary` to fetch the correct binary for the endpoint's architecture automatically from GitHub releases; if no pre-built release is available yet, the script prints build-from-source instructions instead.
 
@@ -202,8 +187,6 @@ The script:
 - Performs mTLS enrollment using the bootstrap token: generates a client cert + key, and **writes the server's CA cert returned by the enrollment response to disk** — you do not need to pre-distribute `ca.pem` to endpoints. The server's CA is trusted on first connect (or verified against the `--server-ca-fingerprint` you obtained out-of-band from `setup-mcp.sh`, which is what the auto-generated install block uses)
 - Writes a config to `~/.config/puck-agent/puck-agent.yaml` (mode 0600)
 - Installs and starts a system service: launchd (macOS), systemd (Linux), or Scheduled Task (Windows, runs at user logon)
-
-The bootstrap token **never lands on argv** — it is passed via file or stdin, so it stays out of shell history and process listings.
 
 To install on your local machine for testing, note the two flags play different roles:
 
@@ -391,9 +374,9 @@ The agent config is at `~/.config/puck-agent/puck-agent.yaml` (or
 
 ## Upgrading Puck
 
-`puck-agent` and `puck-mcp` are **versioned together** — the CSR key algorithm, the policy grammar, and several wire types change across versions, and there is no protocol negotiation. Always run **matching versions** on both sides. The binaries attached to a single [GitHub release](https://github.com/puck-security/puck-scout/releases/latest) are built from the same commit and are guaranteed to match; the usual way to break a deployment is to pair a release-vintage server with a locally-built agent (or vice versa). If you hit a version-skew rejection, see the Troubleshooting entry on [enrollment `400 … csr key algorithm`](#troubleshooting).
+`puck-agent` and `puck-mcp` are **versioned together** — the CSR key algorithm, policy grammar, and wire types change across versions with no protocol negotiation. Always run matching versions from the same [GitHub release](https://github.com/puck-security/puck-scout/releases/latest); the common break is pairing a release server with a locally-built agent (or vice versa). On a version-skew rejection, see [enrollment `400 … csr key algorithm`](#troubleshooting).
 
-The good news: an in-place upgrade is just **swap the binary and restart**. Enrollment material — the agent's `cert.pem` / `cert-key.pem` / `ca.pem` and the server's CA — lives on disk, survives the upgrade, and is *not* tied to the binary. Moving to a new version never requires re-enrolling agents.
+The good news: an in-place upgrade is just **swap the binary and restart**. Enrollment material (the agent's `cert.pem` / `cert-key.pem` / `ca.pem` and the server's CA) lives on disk and survives, so upgrades never require re-enrolling agents.
 
 ### Upgrade the MCP server (operator host)
 
@@ -416,7 +399,7 @@ install -m 0755 puck-mcp-<os>-<arch> "$(command -v puck-mcp)"
 #    - standalone/daemon: restart the service (or stop + re-run).
 ```
 
-On restart, `puck-mcp` **reuses the CA and server cert already on disk** — it only generates a fresh CA when both halves are missing. Enrolled agents pin the CA (not the leaf cert), so they keep trusting the upgraded server with no action on the endpoint. Confirm with `puck-mcp status`, which prints the running version, listeners, cert SANs, and the enrolled-agent list.
+On restart, `puck-mcp` **reuses the CA and server cert already on disk** (regenerating a CA only if both are missing), so enrolled agents keep trusting the upgraded server with no endpoint action. Confirm with `puck-mcp status` (version, listeners, cert SANs, enrolled agents).
 
 > If you ran a standalone `puck-mcp` only to mint bootstrap tokens during enrollment, stop it once the fleet is enrolled — leaving it bound to port 50281 prevents Claude Code's stdio `puck-mcp` from binding. See the Troubleshooting entry on zero `connected_agents`.
 
@@ -431,11 +414,11 @@ sudo systemctl restart puck-agent          # Linux service
 # macOS:  launchctl kickstart -k gui/$(id -u)/io.puck.agent   (system/io.puck.agent for a root install)
 ```
 
-`puck-agent enroll` is a **no-op when a valid cert already exists** (it prints `already enrolled and cert is valid; skipping`), so re-running `install-agent.sh` won't disturb a working enrollment — it just lands the new binary. **Restarting the service after the binary changes is what makes the upgrade take effect.** For fleets, drive this with the same mechanism you used in [Multiple hosts](#multiple-hosts-fleet-enrollment) (Ansible, an SSH loop, MDM).
+`puck-agent enroll` is a no-op when a valid cert exists, so re-running `install-agent.sh` just lands the new binary — the restart above is what applies the upgrade. For fleets, drive it with the mechanism from [Multiple hosts](#multiple-hosts-fleet-enrollment) (Ansible, an SSH loop, MDM).
 
 ### Verify the upgrade
 
-The published checksum is the authoritative check — the version string is convenience, the SHA is proof:
+The checksum is the authoritative check; the version string is convenience:
 
 ```bash
 shasum -a 256 "$(command -v puck-agent)"   # compare against SHA256SUMS for the target release
@@ -525,7 +508,7 @@ curl --cacert /etc/puck-mcp/ca.pem \
 
 A `200 OK` with `{"status":"ok"}` means the mTLS listener is up and the certificate chain is trusted. If the handshake fails, check that `ca.pem` on the agent matches the CA that signed the server cert.
 
-**On macOS, also check the firewall.** The first time `puck-mcp` binds an inbound socket, the kernel firewall pops a prompt asking whether to allow incoming connections. If it was dismissed or auto-denied, `puck-mcp doctor` will still report the listener as bound (because it is) but connections from off-host (including a local VM with bridged networking) silently time out. Verify under **System Settings → Network → Firewall → Options** that `puck-mcp` is set to "Allow incoming connections." From the operator host, `Test-NetConnection <hostname> -Port 50281` on the agent endpoint distinguishes "blocked by firewall" (timeout) from "no listener" (connection refused).
+**On macOS, check the firewall.** On first inbound bind the kernel firewall prompts to allow connections; if it was dismissed, `puck-mcp doctor` still shows the listener bound but off-host connections silently time out. Under **System Settings → Network → Firewall → Options**, set `puck-mcp` to "Allow incoming connections." `Test-NetConnection <host> -Port 50281` from the agent endpoint distinguishes firewall-blocked (timeout) from no-listener (refused).
 
 **Enrollment fails with `400 Bad Request body=csr invalid: csr key algorithm must be …`**
 
@@ -541,9 +524,9 @@ Run `puck-mcp doctor` first — it will report whether more than one `puck-mcp` 
 
 Symptom: `puck-agent` logs show successful registration with the MCP server, but `puck_list_agents` from Claude Code returns an empty fleet.
 
-Cause: two `puck-mcp` processes were running with independent in-memory registries. The agent registered with whichever process bound port 50281 first (typically a long-running `make run`), while Claude Code's tool calls were routed to a separate stdio `puck-mcp` Claude Code spawned via `.mcp.json`. The stdio process couldn't bind 50281, so its registry stayed empty.
+Cause: two `puck-mcp` processes with independent in-memory registries — the agent registered with whichever bound port 50281 first (often a long-running `make run`), while Claude Code's stdio `puck-mcp` (spawned via `.mcp.json`) couldn't bind 50281, so its registry stayed empty.
 
-Current versions of `puck-mcp` refuse to start in this state — the second process exits fatally with a "cannot bind" error pointing at this troubleshooting entry. If you're seeing the silent symptom, you're running an older build; rebuild and the next start will surface the conflict immediately. See [architecture.md → Per-process state](architecture.md#per-process-state--only-one-puck-mcp-should-run-at-a-time).
+Current `puck-mcp` refuses to start in this state (the second process exits with a "cannot bind" error), so the silent symptom means you're on an older build. See [architecture.md → Per-process state](architecture.md#per-process-state--only-one-puck-mcp-should-run-at-a-time).
 
 Diagnosis:
 ```bash
