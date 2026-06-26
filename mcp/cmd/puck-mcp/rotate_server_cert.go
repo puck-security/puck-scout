@@ -64,6 +64,9 @@ func runRotateServerCert(args []string) error {
 		return fmt.Errorf("--replace-sans is mutually exclusive with --add-san and --remove-san")
 	}
 
+	if err := requireConfigFound(fs, *cfgPath); err != nil {
+		return err
+	}
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)

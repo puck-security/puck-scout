@@ -38,11 +38,12 @@ func caFingerprintPin(path string) (string, error) {
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
-// defaultConfigPath returns the first existing puck-mcp.yaml it can find,
-// preferring the user-local path (~/.config/puck-mcp/puck-mcp.yaml) over the
-// system-wide path (/etc/puck-mcp/puck-mcp.yaml).  This allows non-root
-// operators to run generate-bootstrap-token without --config.
-func defaultConfigPath() string {
+// configSearchPaths lists the candidate puck-mcp.yaml locations in precedence
+// order: the user-local path (~/.config/puck-mcp/puck-mcp.yaml) first when
+// $HOME is known, then the system-wide path (/etc/puck-mcp/puck-mcp.yaml).
+// Shared by defaultConfigPath (which picks the first that exists) and the
+// not-found error message (which lists them all).
+func configSearchPaths() []string {
 	candidates := []string{
 		"/etc/puck-mcp/puck-mcp.yaml",
 	}
@@ -52,12 +53,49 @@ func defaultConfigPath() string {
 			filepath.Join(home, ".config", "puck-mcp", "puck-mcp.yaml"),
 		}, candidates...)
 	}
-	for _, p := range candidates {
+	return candidates
+}
+
+// defaultConfigPath returns the first existing puck-mcp.yaml it can find,
+// preferring the user-local path over the system-wide path.  This allows
+// non-root operators to run generate-bootstrap-token without --config.  When
+// none exists it falls through to the system path; callers should use
+// requireConfigFound to produce a clear, all-paths-listed error rather than
+// letting config.Load surface a bare single-path "no such file" error.
+func defaultConfigPath() string {
+	for _, p := range configSearchPaths() {
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}
 	}
-	return "/etc/puck-mcp/puck-mcp.yaml" // fall through; config.Load will surface a clear error
+	return "/etc/puck-mcp/puck-mcp.yaml" // fall through
+}
+
+// requireConfigFound returns a helpful error when the operator did NOT pass
+// --config and no puck-mcp.yaml exists at any default search path.  Without
+// it, config.Load reports only the single fallback path (/etc/...), hiding
+// the fact that the user-local path (~/.config/...) was searched too — the
+// "no such file or directory" error that confuses fresh installs.  When
+// --config WAS given explicitly, this is a no-op: config.Load reports that
+// exact path verbatim.
+func requireConfigFound(flagSet *flag.FlagSet, cfgPath string) error {
+	explicit := false
+	flagSet.Visit(func(f *flag.Flag) {
+		if f.Name == "config" {
+			explicit = true
+		}
+	})
+	if explicit {
+		return nil
+	}
+	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
+		return fmt.Errorf(
+			"no puck-mcp.yaml found (searched: %s) -- "+
+				"run setup-mcp.sh to create the MCP server config + PKI, "+
+				"or pass --config <path> if it lives elsewhere",
+			strings.Join(configSearchPaths(), ", "))
+	}
+	return nil
 }
 
 func runGenerateBootstrapToken(args []string) error {
@@ -126,6 +164,9 @@ func runGenerateBootstrapToken(args []string) error {
 				"hostname %q does not match the regex used by the agent listener; "+
 					"pick a name with [a-zA-Z0-9._-] only", h)
 		}
+	}
+	if err := requireConfigFound(fs, *cfgPath); err != nil {
+		return err
 	}
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
