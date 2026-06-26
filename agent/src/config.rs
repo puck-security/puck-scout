@@ -111,6 +111,13 @@ impl AgentConfig {
         let mut config: Self = serde_yaml::from_str(&bytes)
             .with_context(|| format!("deserialize config {}", path.display()))?;
         config.mcp_server = validate_mcp_server_url(&config.mcp_server)?;
+        // Canonicalise the hostname to lowercase.  DNS hostnames are
+        // case-insensitive (RFC 4343), and the MCP server folds case when
+        // deriving identity from the client cert.  Lowercasing here keeps the
+        // agent's self-reported identity (agent_id, renewal CSR CN) consistent
+        // with how the server keys this agent, regardless of the case the
+        // operator typed at enroll time.
+        config.hostname = config.hostname.trim().to_ascii_lowercase();
 
         // INTEGRITY: validate the security-critical paths the config references.
         // tls_ca_path is the trust anchor; if an attacker can swap it for a CA
@@ -245,6 +252,14 @@ hostname: "testhost"
     /// directory.
     #[cfg(unix)]
     fn integrity_env(extra_yaml: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        integrity_env_with_hostname("testhost", extra_yaml)
+    }
+
+    #[cfg(unix)]
+    fn integrity_env_with_hostname(
+        hostname: &str,
+        extra_yaml: &str,
+    ) -> (tempfile::TempDir, std::path::PathBuf) {
         use std::io::Write;
         use std::os::unix::fs::PermissionsExt;
         let manifest = std::env::var("CARGO_MANIFEST_DIR")
@@ -262,8 +277,8 @@ hostname: "testhost"
             std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode)).unwrap();
         }
         let yaml = format!(
-            "\nmcp_server: \"https://localhost:8081\"\nhostname: \"testhost\"\ntls_cert_path: '{}'\ntls_key_path:  '{}'\ntls_ca_path:   '{}'\n{}",
-            cert.display(), key.display(), ca.display(), extra_yaml,
+            "\nmcp_server: \"https://localhost:8081\"\nhostname: \"{}\"\ntls_cert_path: '{}'\ntls_key_path:  '{}'\ntls_ca_path:   '{}'\n{}",
+            hostname, cert.display(), key.display(), ca.display(), extra_yaml,
         );
         let cfg_path = dir.path().join("puck-agent.yaml");
         let mut f = std::fs::File::create(&cfg_path).unwrap();
@@ -277,6 +292,18 @@ hostname: "testhost"
     fn load_happy_path_passes_integrity() {
         let (_dir, cfg_path) = integrity_env("");
         AgentConfig::load(&cfg_path).expect("clean config must load");
+    }
+
+    // Hostname identity is case-insensitive (RFC 4343); the MCP server folds
+    // case when deriving identity from the client cert.  load() must lowercase
+    // the configured hostname so the agent's self-reported identity (agent_id,
+    // renewal CSR CN) matches how the server keys it.
+    #[cfg(unix)]
+    #[test]
+    fn load_canonicalises_hostname_to_lowercase() {
+        let (_dir, cfg_path) = integrity_env_with_hostname("ENG-Laptop-47", "");
+        let cfg = AgentConfig::load(&cfg_path).expect("config must load");
+        assert_eq!(cfg.hostname, "eng-laptop-47");
     }
 
     #[cfg(unix)]
