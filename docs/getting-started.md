@@ -250,6 +250,21 @@ first, then `/etc/puck-agent/puck-agent.yaml` on Unix.  Both `enroll` and
 `serve` use the same per-platform default install directory so you only have
 to pass `--config` when you've put the file somewhere non-standard.
 
+#### Windows endpoint (PowerShell)
+
+There's no install script for Windows — instead, generate the token **with `--server`** on the MCP host and it prints a paste-ready PowerShell block (download + SHA256 verify, enroll via stdin, CA-pinned, registers a Scheduled Task). Typical cross-machine case: a macOS/Linux server with a Windows agent on the same LAN.
+
+```bash
+# On the MCP host — pass the address the Windows box will actually dial:
+puck-mcp generate-bootstrap-token --hostname win-box-01 --server https://192.168.1.10:50281
+```
+
+Paste the emitted **Windows** block into PowerShell on the endpoint. Three things to get right for cross-machine enrollment:
+
+- **The cert SAN must cover that address.** The agent verifies the server cert at `serve` time, so set the server up with `setup-mcp.sh --hostname <server-LAN-IP>` (or `--server-cert-sans <ip>,…`) — otherwise enroll succeeds (TOFU) but `serve` fails TLS. See Step 1's deployment-pattern options for mesh / DDNS / mDNS alternatives.
+- **Open the server firewall** for inbound TCP `50281` (the agent listener binds `0.0.0.0`; macOS prompts on first bind).
+- **The Scheduled Task runs at user logon**, so the agent is active only while that user is signed in. For an always-on Windows host, register it as a system-level task instead.
+
 ### Step 4: Run your first investigation
 
 Open Claude Code and ask puck directly — name the tool to make sure it routes to puck rather than a local skill:
