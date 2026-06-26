@@ -1,0 +1,12 @@
+# OSV-Scanner configuration.
+# Run in CI via `osv-scanner --config osv-scanner.toml --recursive .`
+# (security-deep.yml) so these ignores apply to every scanned lockfile.
+
+# RUSTSEC-2025-0134: rustls-pemfile is unmaintained (repo archived Aug 2025).
+# It is an informational "unmaintained" advisory — NOT an exploitable
+# vulnerability, and there is no patched version. The crate is a thin wrapper
+# over the PEM parsing now in rustls-pki-types. Removing the dependency is
+# tracked in #13; this entry should be deleted once that migration lands.
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0134"
+reason = "rustls-pemfile unmaintained-only (no exploit, no fix); thin wrapper over rustls-pki-types. Migration tracked in #13."

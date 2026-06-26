@@ -1,8 +1,6 @@
 module github.com/puck-security/puck-scout/mcp
 
-go 1.24.0
-
-toolchain go1.25.11
+go 1.25.11
 
 require (
 	github.com/BurntSushi/toml v1.3.2
@@ -14,5 +12,5 @@ require (
 require (
 	github.com/kr/text v0.2.0 // indirect
 	github.com/rogpeppe/go-internal v1.9.0 // indirect
-	golang.org/x/sys v0.37.0 // indirect
+	golang.org/x/sys v0.46.0 // indirect
 )
