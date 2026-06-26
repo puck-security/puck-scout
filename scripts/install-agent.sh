@@ -281,7 +281,37 @@ ENROLL_ARGS=(
 if [[ -n "$SERVER_CA_FP" ]]; then
     ENROLL_ARGS+=(--server-ca-fingerprint "$SERVER_CA_FP")
 fi
+set +e
 "$PUCK_AGENT_BIN" enroll "${ENROLL_ARGS[@]}" <<< "$TOKEN"
+ENROLL_RC=$?
+set -e
+if [[ "$ENROLL_RC" -ne 0 ]]; then
+    # Extract the host portion of --server for a targeted hint.
+    _srv_host="${SERVER#*://}"   # strip scheme
+    _srv_host="${_srv_host%%/*}" # strip any path
+    _srv_host="${_srv_host%%:*}" # strip :port (cosmetic; ok for the hint)
+    cat <<HINT >&2
+
+ERROR: enrollment request to $SERVER failed (puck-agent enroll exit $ENROLL_RC).
+
+  The most common cause is that the --server host is not reachable from this
+  endpoint, or its name does not resolve.  Checklist:
+
+    * Installing on the SAME machine as the MCP server?  Use loopback, not the
+      hostname:
+          --server https://127.0.0.1:50281
+      setup-mcp.sh always puts 127.0.0.1 in the server cert SANs, and loopback
+      needs no DNS.  (--hostname can stay "$HOSTNAME_ARG" -- it is the agent's
+      identity, not where it connects.)
+
+    * A bare hostname like "$_srv_host" frequently does NOT resolve on macOS
+      (the mDNS form is "$_srv_host.local").  For remote endpoints, prefer a
+      Tailscale/DNS name that resolves AND is listed in --server-cert-sans.
+
+    * Confirm the MCP server is running and listening on the agent port (50281).
+HINT
+    exit "$ENROLL_RC"
+fi
 
 # Wipe the local TOKEN variable
 TOKEN=""

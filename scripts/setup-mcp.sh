@@ -333,18 +333,43 @@ if [[ -x "$PUCK_AGENT_BIN_LOCAL" && -t 0 ]]; then
             fi
             sleep 1
         done
-        SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        # Locate the sibling install-agent.sh.  When setup-mcp.sh is run via a
+        # pipe or process substitution (curl ... | bash, or bash <(curl ...)),
+        # BASH_SOURCE[0] is NOT a real on-disk path -- it is "bash", "main", or
+        # /dev/fd/NN -- so a naive dirname+cd resolves to /dev/fd and the script
+        # then tries to exec a nonexistent "/dev/fd/install-agent.sh".  Resolve
+        # only from a real regular file, and fall back to printed manual steps
+        # when there is no sibling script on disk.
+        INSTALL_AGENT_SH=""
+        if [[ -n "$_SCRIPT" && -f "$_SCRIPT" ]]; then
+            _SD="$(cd "$(dirname "$_SCRIPT")" 2>/dev/null && pwd)" || true
+            [[ -n "$_SD" && -f "$_SD/install-agent.sh" ]] && INSTALL_AGENT_SH="$_SD/install-agent.sh"
+        fi
+        if [[ -n "$INSTALL_AGENT_SH" ]]; then
+            ENROLL_HINT="bash $INSTALL_AGENT_SH"
+        else
+            ENROLL_HINT="bash install-agent.sh  # from github.com/puck-security/puck-scout (scripts/install-agent.sh)"
+        fi
+
         if [[ "$ENROLL_READY" -eq 0 ]]; then
             echo "WARN: puck-mcp did not come up (crashed or slow); skipping enrollment."
             [[ -s "$ENROLL_LOG" ]] && { echo "      Server output:"; head -20 "$ENROLL_LOG"; }
             echo "      Re-enroll after opening Claude Code:"
             echo "  $ABS_PUCK_MCP_BIN generate-bootstrap-token --config $ABS_CONFIG_FILE --hostname $ENROLL_HOSTNAME > /tmp/tok"
-            echo "  bash $SCRIPT_DIR/install-agent.sh --server https://127.0.0.1:50281 --hostname $ENROLL_HOSTNAME --token-file /tmp/tok"
+            echo "  $ENROLL_HINT --server https://127.0.0.1:50281 --hostname $ENROLL_HOSTNAME --token-file /tmp/tok"
+        elif [[ -z "$INSTALL_AGENT_SH" ]]; then
+            # Server is up, but there is no install-agent.sh on disk to exec
+            # (setup-mcp.sh was run via a pipe or process substitution).  Print
+            # manual steps instead of failing on a /dev/fd path.
+            echo "  [*] Server is up, but install-agent.sh is not on disk because setup-mcp.sh"
+            echo "      was run via a pipe or process substitution.  Enroll this machine with:"
+            echo "  $ABS_PUCK_MCP_BIN generate-bootstrap-token --config $ABS_CONFIG_FILE --hostname $ENROLL_HOSTNAME > /tmp/tok"
+            echo "  $ENROLL_HINT --server https://127.0.0.1:50281 --hostname $ENROLL_HOSTNAME --token-file /tmp/tok"
         else
             TOKEN_FILE=$(mktemp)
             "$PUCK_MCP_BIN" generate-bootstrap-token --config "$CONFIG_FILE" \
                 --hostname "$ENROLL_HOSTNAME" > "$TOKEN_FILE"
-            if bash "$SCRIPT_DIR/install-agent.sh" \
+            if bash "$INSTALL_AGENT_SH" \
                     --server "https://127.0.0.1:50281" \
                     --hostname "$ENROLL_HOSTNAME" \
                     --token-file "$TOKEN_FILE"; then
@@ -352,7 +377,7 @@ if [[ -x "$PUCK_AGENT_BIN_LOCAL" && -t 0 ]]; then
             else
                 echo "WARN: enrollment failed; re-enroll after opening Claude Code:"
                 echo "  $ABS_PUCK_MCP_BIN generate-bootstrap-token --config $ABS_CONFIG_FILE --hostname $ENROLL_HOSTNAME > /tmp/tok"
-                echo "  bash $SCRIPT_DIR/install-agent.sh --server https://127.0.0.1:50281 --hostname $ENROLL_HOSTNAME --token-file /tmp/tok"
+                echo "  $ENROLL_HINT --server https://127.0.0.1:50281 --hostname $ENROLL_HOSTNAME --token-file /tmp/tok"
             fi
             rm -f "$TOKEN_FILE"
         fi

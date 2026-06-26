@@ -205,16 +205,22 @@ The script:
 
 The bootstrap token **never lands on argv** — it is passed via file or stdin, so it stays out of shell history and process listings.
 
-To install on your local machine for testing (uses `$(hostname)` so the cert CN matches):
+To install on your local machine for testing, note the two flags play different roles:
+
+- `--hostname $(hostname)` is the agent's **identity** — it becomes the client cert CN and the name the bootstrap token is bound to.
+- `--server` is **where the agent reaches the MCP server**. For a same-machine install that is loopback — `https://127.0.0.1:50281` — which `setup-mcp.sh` always includes in the server cert SANs and which needs no DNS.
+
+Do **not** use `https://$(hostname):50281` for `--server`: a bare hostname like `MacBook-Pro-1a2b3c` usually does not resolve on macOS (the mDNS form is `<host>.local`), so enrollment fails with a DNS lookup error.
 
 ```bash
 # Generate a token bound to this hostname.  --ttl is optional; default is 4h.
 puck-mcp generate-bootstrap-token --hostname $(hostname) | \
   grep puck-bt- > /tmp/bootstrap-token
 
-# Enroll — add --download-binary to fetch the agent binary automatically
+# Enroll — add --download-binary to fetch the agent binary automatically.
+# --server is loopback (same machine); --hostname is this agent's identity.
 bash scripts/install-agent.sh \
-  --server https://$(hostname):50281 \
+  --server https://127.0.0.1:50281 \
   --hostname $(hostname) \
   --token-file /tmp/bootstrap-token \
   --download-binary

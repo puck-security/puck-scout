@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
+	"flag"
 	"io"
 	"os"
 	"path/filepath"
@@ -95,6 +96,62 @@ func TestGenerateBootstrapToken_HostnameAndHostnamesMutuallyExclusive(t *testing
 	})
 	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Fatalf("expected mutually-exclusive error, got %v", err)
+	}
+}
+
+// TestRequireConfigFound_NoConfig_ListsAllSearchPaths pins that when no
+// puck-mcp.yaml exists and --config was not given, the error names BOTH the
+// user-local and system search paths plus the setup hint — not just the bare
+// /etc path config.Load would otherwise surface (the "no such file" message
+// that confused a fresh install).
+func TestRequireConfigFound_NoConfig_ListsAllSearchPaths(t *testing.T) {
+	fs := flag.NewFlagSet("generate-bootstrap-token", flag.ContinueOnError)
+	_ = fs.String("config", defaultConfigPath(), "")
+	// No --config passed, so it stays "unvisited" and requireConfigFound emits
+	// the search-path listing rather than treating the path as operator-chosen.
+	if err := fs.Parse(nil); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	// Simulate "nothing found anywhere": a path that does not exist, with
+	// --config unvisited.  Using a missing path keeps the test independent of
+	// whatever is on the host's filesystem.
+	missing := filepath.Join(t.TempDir(), "nope", "puck-mcp.yaml")
+	err := requireConfigFound(fs, missing)
+	if err == nil {
+		t.Fatal("expected an error when no config exists")
+	}
+	msg := err.Error()
+	// The message must name EVERY default search path (the regression was that
+	// only /etc was shown, hiding the user-local path).  Derive the expectation
+	// from the same helper the production code uses, so the assertion is
+	// platform-agnostic: os.UserHomeDir reads $HOME on Unix but %USERPROFILE%
+	// on Windows, so hardcoding a home dir (or setting $HOME) does not work
+	// cross-platform.
+	paths := configSearchPaths()
+	if len(paths) < 2 {
+		t.Fatalf("expected >=2 search paths (user-local + system); got %v", paths)
+	}
+	for _, p := range paths {
+		if !strings.Contains(msg, p) {
+			t.Errorf("error must name search path %q; got: %s", p, msg)
+		}
+	}
+	if !strings.Contains(msg, "setup-mcp.sh") {
+		t.Errorf("error must hint at setup-mcp.sh; got: %s", msg)
+	}
+}
+
+// TestRequireConfigFound_ExplicitConfig_IsNoOp pins that when --config is
+// passed explicitly, requireConfigFound stays out of the way so config.Load
+// reports that exact path verbatim (rather than the default search list).
+func TestRequireConfigFound_ExplicitConfig_IsNoOp(t *testing.T) {
+	fs := flag.NewFlagSet("generate-bootstrap-token", flag.ContinueOnError)
+	cfgPath := fs.String("config", defaultConfigPath(), "")
+	if err := fs.Parse([]string{"--config", filepath.Join(t.TempDir(), "missing.yaml")}); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if err := requireConfigFound(fs, *cfgPath); err != nil {
+		t.Fatalf("explicit --config should be a no-op; got %v", err)
 	}
 }
 
