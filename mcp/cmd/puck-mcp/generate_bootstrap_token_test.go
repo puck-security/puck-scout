@@ -105,9 +105,6 @@ func TestGenerateBootstrapToken_HostnameAndHostnamesMutuallyExclusive(t *testing
 // /etc path config.Load would otherwise surface (the "no such file" message
 // that confused a fresh install).
 func TestRequireConfigFound_NoConfig_ListsAllSearchPaths(t *testing.T) {
-	tmp := t.TempDir()
-	t.Setenv("HOME", tmp) // make the user-local search path deterministic + absent
-
 	fs := flag.NewFlagSet("generate-bootstrap-token", flag.ContinueOnError)
 	_ = fs.String("config", defaultConfigPath(), "")
 	// No --config passed, so it stays "unvisited" and requireConfigFound emits
@@ -116,21 +113,28 @@ func TestRequireConfigFound_NoConfig_ListsAllSearchPaths(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 	// Simulate "nothing found anywhere": a path that does not exist, with
-	// --config unvisited.  (defaultConfigPath() falls through to the /etc path
-	// when neither candidate exists; we use an explicit missing path so the
-	// test is independent of whatever is on the host's filesystem.)
-	missing := filepath.Join(tmp, "nope", "puck-mcp.yaml")
+	// --config unvisited.  Using a missing path keeps the test independent of
+	// whatever is on the host's filesystem.
+	missing := filepath.Join(t.TempDir(), "nope", "puck-mcp.yaml")
 	err := requireConfigFound(fs, missing)
 	if err == nil {
 		t.Fatal("expected an error when no config exists")
 	}
 	msg := err.Error()
-	wantUser := filepath.Join(tmp, ".config", "puck-mcp", "puck-mcp.yaml")
-	if !strings.Contains(msg, wantUser) {
-		t.Errorf("error must name the user-local search path %q; got: %s", wantUser, msg)
+	// The message must name EVERY default search path (the regression was that
+	// only /etc was shown, hiding the user-local path).  Derive the expectation
+	// from the same helper the production code uses, so the assertion is
+	// platform-agnostic: os.UserHomeDir reads $HOME on Unix but %USERPROFILE%
+	// on Windows, so hardcoding a home dir (or setting $HOME) does not work
+	// cross-platform.
+	paths := configSearchPaths()
+	if len(paths) < 2 {
+		t.Fatalf("expected >=2 search paths (user-local + system); got %v", paths)
 	}
-	if !strings.Contains(msg, "/etc/puck-mcp/puck-mcp.yaml") {
-		t.Errorf("error must name the system search path; got: %s", msg)
+	for _, p := range paths {
+		if !strings.Contains(msg, p) {
+			t.Errorf("error must name search path %q; got: %s", p, msg)
+		}
 	}
 	if !strings.Contains(msg, "setup-mcp.sh") {
 		t.Errorf("error must hint at setup-mcp.sh; got: %s", msg)
