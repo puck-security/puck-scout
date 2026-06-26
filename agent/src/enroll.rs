@@ -40,7 +40,12 @@ pub struct EnrollArgs {
     pub server_ca_fingerprint: Option<String>,
 }
 
-pub fn run(args: EnrollArgs) -> Result<()> {
+pub fn run(mut args: EnrollArgs) -> Result<()> {
+    // Canonicalise the hostname to lowercase so the CSR CN, the enrollment
+    // request, and the written puck-agent.yaml all use the same case-folded
+    // identity the MCP server keys agents by (see the server's identity
+    // middleware).  Matches config.rs, which lowercases hostname on load.
+    args.hostname = args.hostname.trim().to_ascii_lowercase();
     // Normalise the server URL: strip whitespace and trailing slashes, then
     // validate that it uses https:// and has no path component.  This mirrors
     // the validation in config.rs (validate_mcp_server_url) but is needed here

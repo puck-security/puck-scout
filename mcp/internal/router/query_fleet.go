@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -52,7 +53,10 @@ func (r *Router) handleQueryFleet(args map[string]any) mcp.ToolCallResult {
 		if arr, ok := rawHosts.([]any); ok {
 			for _, v := range arr {
 				if s, ok := v.(string); ok {
-					hostnames = append(hostnames, s)
+					// Canonicalise to lowercase so per-host lookups match the
+					// cert-derived agent identity regardless of LLM casing.
+					// The "all" sentinel is already lowercase and unaffected.
+					hostnames = append(hostnames, strings.ToLower(s))
 				}
 			}
 		}

@@ -56,6 +56,26 @@ func TestIdentity_PlantsHostnameInContext(t *testing.T) {
 	}
 }
 
+// TestIdentity_HostnameCanonicalisedToLowercase pins that the cert-derived
+// hostname handed downstream is lowercased.  This is what keeps the registry,
+// command queue, and per-host delivery authz case-insensitive (and keeps
+// agents enrolled with a mixed-case cert CN reachable) — see identity.go.
+func TestIdentity_HostnameCanonicalisedToLowercase(t *testing.T) {
+	cert := &x509.Certificate{
+		Subject:  pkix.Name{CommonName: "ENG-Laptop-47"},
+		DNSNames: []string{"ENG-Laptop-47"}, // CN==SAN check is on raw fields
+	}
+	req := httptest.NewRequest("GET", "/", nil)
+	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}}
+	var got string
+	requireMTLSIdentity(func(w http.ResponseWriter, r *http.Request) {
+		got = HostnameFromContext(r.Context())
+	})(httptest.NewRecorder(), req)
+	if got != "eng-laptop-47" {
+		t.Fatalf("hostname from ctx = %q, want canonical lowercase %q", got, "eng-laptop-47")
+	}
+}
+
 func TestIdentity_InvalidHostnameInCert_Rejected(t *testing.T) {
 	cert := &x509.Certificate{
 		Subject:  pkix.Name{CommonName: "bad;hostname"},

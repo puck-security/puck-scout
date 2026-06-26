@@ -48,6 +48,33 @@ func TestToken_HostnameBinding(t *testing.T) {
 	}
 }
 
+// TestToken_HostnameBinding_CaseInsensitive pins that a token's hostname
+// binding is canonical (lowercase) and case-folded on validation, so an
+// operator who generates a token for "Eng-Laptop-47" and an agent that
+// enrolls as "eng-laptop-47" (or vice versa) still match.  Hostname identity
+// is case-insensitive everywhere — see server/identity.go.
+func TestToken_HostnameBinding_CaseInsensitive(t *testing.T) {
+	l := newLedger(t)
+	tok, err := l.Issue("Eng-Laptop-47", time.Hour)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	if tok.Hostname != "eng-laptop-47" {
+		t.Fatalf("Issue should canonicalise the binding to lowercase; got %q", tok.Hostname)
+	}
+	if err := l.Validate(tok.Plaintext, "ENG-LAPTOP-47"); err != nil {
+		t.Fatalf("case-folded Validate should match: %v", err)
+	}
+	if err := l.ValidateAndSpend(tok.Plaintext, "eng-laptop-47"); err != nil {
+		t.Fatalf("case-folded ValidateAndSpend should match: %v", err)
+	}
+	// A genuinely different host still mismatches.
+	tok2, _ := l.Issue("host-a", time.Hour)
+	if err := l.Validate(tok2.Plaintext, "host-b"); !errors.Is(err, ErrTokenHostMismatch) {
+		t.Fatalf("want ErrTokenHostMismatch for a different host, got %v", err)
+	}
+}
+
 func TestToken_Expiry(t *testing.T) {
 	l := newLedger(t)
 	tok, _ := l.Issue("host-a", -1*time.Second)

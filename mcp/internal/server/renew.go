@@ -5,6 +5,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/puck-security/puck-scout/mcp/internal/audit"
@@ -39,7 +40,11 @@ func (h *RenewCertHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "csr invalid: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if csr.Subject != hostname {
+	// Case-insensitive: the presented cert's hostname is canonicalised to
+	// lowercase in identity.go, while an agent enrolled before that change may
+	// still present a mixed-case CSR CN at renewal.  EqualFold keeps such
+	// agents able to renew. See server/identity.go for the rationale.
+	if !strings.EqualFold(csr.Subject, hostname) {
 		http.Error(w, "csr subject does not match presented cert hostname", http.StatusForbidden)
 		return
 	}

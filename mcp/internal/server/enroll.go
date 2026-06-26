@@ -53,6 +53,10 @@ func (h *EnrollHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "hostname and csr_pem required", http.StatusBadRequest)
 		return
 	}
+	// Canonicalise the hostname to lowercase so token binding, the issued
+	// cert's identity, and later fleet-query routing all agree regardless of
+	// the case the operator typed.  See server/identity.go for the rationale.
+	req.Hostname = strings.ToLower(req.Hostname)
 
 	// Parse + validate the CSR shape before consuming the token.  Garbage
 	// CSRs shouldn't waste single-use tokens.
@@ -61,7 +65,11 @@ func (h *EnrollHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "csr invalid: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if csr.Subject != req.Hostname {
+	// Case-insensitive CN match: the agent may present a mixed-case CSR CN
+	// (e.g. an older agent that did not lowercase its hostname) while we
+	// canonicalised req.Hostname above.  Identity is derived case-folded at
+	// every comparison point, so EqualFold is the correct equality here.
+	if !strings.EqualFold(csr.Subject, req.Hostname) {
 		http.Error(w, "csr subject CN does not match hostname", http.StatusBadRequest)
 		return
 	}

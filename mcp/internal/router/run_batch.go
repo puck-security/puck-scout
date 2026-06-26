@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -85,6 +86,9 @@ func (r *Router) handleRunBatch(args map[string]any) mcp.ToolCallResult {
 		if !reHostnameCheck.MatchString(host) {
 			return mcp.ErrorResult(fmt.Sprintf("commands[%d]: hostname %q contains invalid characters", i, host))
 		}
+		// Canonicalise to lowercase so registry/queue lookups match the
+		// cert-derived agent identity regardless of LLM casing.
+		host = strings.ToLower(host)
 		cmd, _ := m["command"].(string)
 		if cmd == "" {
 			return mcp.ErrorResult(fmt.Sprintf("commands[%d]: missing command", i))

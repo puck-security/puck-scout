@@ -35,6 +35,10 @@ func (r *Router) handleRunCheck(args map[string]any) mcp.ToolCallResult {
 	if !reHostnameCheck.MatchString(hostname) {
 		return mcp.ErrorResult("hostname contains invalid characters")
 	}
+	// Canonicalise to lowercase so the registry/queue lookup matches the
+	// cert-derived (case-folded) agent identity regardless of how the
+	// untrusted LLM cased the target. See server/identity.go.
+	hostname = strings.ToLower(hostname)
 
 	command, _ := args["command"].(string)
 	if command == "" {
