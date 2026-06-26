@@ -1,12 +1,15 @@
-# security-deep.yml — weekly + every release tag.
+# security-deep.yml — on every PR, weekly, and every release tag.
 #
 # OSV-Scanner is the most thorough cross-language vuln scanner
-# (Go modules + cargo + git submodules + npm + pypi + ...).  Slower
-# than the fast tier — runs on a schedule and on release tags so the
-# release itself is gated.
+# (Go modules + cargo + git submodules + npm + pypi + ...).  It runs on
+# pull_request so dependency / stdlib advisories are caught BEFORE merge
+# — not as a surprise at release-tag time — plus weekly and on release
+# tags.  Note OSV reads the `go` directive in go.mod as the stdlib
+# version (not `toolchain`), so keep `go` patched to a fixed release.
 name: security-deep
 
 on:
+  pull_request:
   schedule:
     - cron: "0 6 * * 1"   # Monday 06:00 UTC — same window as Dependabot
   push:
@@ -24,7 +27,7 @@ jobs:
       - uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
       - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32  # v5.0.2
         with:
-          go-version: '1.25.10'
+          go-version: '1.25.11'
       - name: Install osv-scanner
         # google/osv-scanner is a single Go binary; install via the
         # module proxy.  Pinned version closes the supply-chain gap
@@ -32,6 +35,7 @@ jobs:
         run: go install github.com/google/osv-scanner/cmd/osv-scanner@v1.9.2
       - name: Scan
         # --recursive walks the tree finding go.sum, Cargo.lock, etc.
-        # Exits non-zero on any vuln; on a release tag this gates the
-        # release.
-        run: osv-scanner --recursive .
+        # --config applies osv-scanner.toml (documented ignores) to every
+        # scanned lockfile.  Exits non-zero on any unignored vuln, failing
+        # the PR check before merge.
+        run: osv-scanner --config osv-scanner.toml --recursive .
