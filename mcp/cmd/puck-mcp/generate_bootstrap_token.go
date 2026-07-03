@@ -1,10 +1,6 @@
 package main
 
 import (
-	"crypto/sha256"
-	"crypto/x509"
-	"encoding/hex"
-	"encoding/pem"
 	"flag"
 	"fmt"
 	"os"
@@ -13,30 +9,10 @@ import (
 	"time"
 
 	"github.com/puck-security/puck-scout/mcp/internal/config"
+	"github.com/puck-security/puck-scout/mcp/internal/enroll"
 	"github.com/puck-security/puck-scout/mcp/internal/pki"
 	"github.com/puck-security/puck-scout/mcp/internal/server"
 )
-
-// caFingerprintPin reads the CA cert at path, parses the first PEM block,
-// and returns the SHA-256 fingerprint formatted as `sha256:<64 lowercase hex>`
-// — the format puck-agent's --server-ca-fingerprint expects.  Returns "" on
-// any error (caller falls back to omitting the flag).
-func caFingerprintPin(path string) (string, error) {
-	pemBytes, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("read ca cert: %w", err)
-	}
-	block, _ := pem.Decode(pemBytes)
-	if block == nil {
-		return "", fmt.Errorf("%s is not a PEM file", path)
-	}
-	// Parse to confirm it's a real cert (errors out on garbage).
-	if _, err := x509.ParseCertificate(block.Bytes); err != nil {
-		return "", fmt.Errorf("parse ca cert: %w", err)
-	}
-	sum := sha256.Sum256(block.Bytes)
-	return "sha256:" + hex.EncodeToString(sum[:]), nil
-}
 
 // configSearchPaths lists the candidate puck-mcp.yaml locations in precedence
 // order: the user-local path (~/.config/puck-mcp/puck-mcp.yaml) first when
@@ -181,7 +157,7 @@ func runGenerateBootstrapToken(args []string) error {
 	// in --server mode (operator asked for install one-liners that pin CA).
 	var caFp string
 	if *serverURL != "" {
-		caFp, err = caFingerprintPin(cfg.CACertPath)
+		caFp, err = enroll.CAFingerprint(cfg.CACertPath)
 		if err != nil {
 			return fmt.Errorf("compute ca fingerprint (needed for install one-liner): %w", err)
 		}
@@ -216,13 +192,7 @@ func printInstallBlock(hostname string, tok *pki.BootstrapToken, serverURL, caFp
 			hostname, tok.ExpiresAt.Format(time.RFC3339))
 
 		fmt.Println("Linux/macOS — paste into any terminal:")
-		fmt.Printf(
-			"  curl -fsSL https://raw.githubusercontent.com/puck-security/puck-scout/main/scripts/install-agent.sh"+
-				" | PUCK_BOOTSTRAP_TOKEN='%s' bash -s --"+
-				" --server %s --hostname %s"+
-				" --server-ca-fingerprint %s"+
-				" --download-binary\n\n",
-			tok.Plaintext, serverURL, hostname, caFp)
+		fmt.Printf("  %s\n\n", enroll.LinuxInstallCommand(hostname, tok.Plaintext, serverURL, caFp))
 
 		// PowerShell block for Windows — user pastes the whole thing into PS.
 		// Architecture detection: AMD64 → amd64, ARM64 → arm64.
