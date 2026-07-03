@@ -388,11 +388,31 @@ versions from the same [release](https://github.com/puck-security/puck-scout/rel
 Mixing a release-vintage server with a locally-built agent is the usual cause of a
 `400 … csr key algorithm` rejection.
 
-An in-place upgrade is **swap the binary and restart** — enrollment material
-survives on disk, so upgrades never re-enroll agents. Verify against the release
-checksums, then install over the old binary (use `puck-agent` to upgrade the agent):
+An upgrade is **swap the binary and restart** — enrollment material survives on
+disk, so upgrades never re-enroll agents.
+
+**One command** — downloads the latest binaries, SHA256-verifies them, swaps them in
+place (config/PKI untouched), and restarts the agent service. On the all-in-one host
+(swaps both `puck-mcp` and `puck-agent`):
 
 ```bash
+curl -fsSL https://github.com/puck-security/puck-scout/releases/latest/download/install.sh | bash -s -- --upgrade
+```
+
+On a remote agent host (swaps `puck-agent` only):
+
+```bash
+curl -fsSL https://github.com/puck-security/puck-scout/releases/latest/download/install-agent.sh | bash -s -- --upgrade
+```
+
+Restart Claude Code afterward so it picks up the new `puck-mcp` (the server runs as
+its stdio child, not a daemon).
+
+**By hand** — download the new binary, verify against the release checksums, then
+install over the old one:
+
+```bash
+curl -fsSLO https://github.com/puck-security/puck-scout/releases/latest/download/puck-mcp-<os>-<arch>
 curl -fsSLO https://github.com/puck-security/puck-scout/releases/latest/download/SHA256SUMS
 shasum -a 256 --ignore-missing -c SHA256SUMS
 install -m 0755 puck-mcp-<os>-<arch> "$(command -v puck-mcp)"

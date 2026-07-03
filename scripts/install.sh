@@ -23,6 +23,49 @@ HN="$(hostname)"
 say() { printf '  %s\n' "$*"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
+# ---------------- args ----------------
+UPGRADE=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --upgrade) UPGRADE=1; shift ;;
+        -h|--help)
+            echo "install.sh — one-command local Puck installer."
+            echo "  (no args)   fresh install: binaries + MCP server + enroll this host"
+            echo "  --upgrade   download the latest binaries and swap them in place"
+            echo "              (config, PKI, and enrollment are kept — no re-enroll);"
+            echo "              restarts the agent service, then asks you to restart Claude Code"
+            exit 0 ;;
+        *) die "unknown argument: $1 (see --help)" ;;
+    esac
+done
+
+# restart_agent_service — best-effort restart of the puck-agent service so a
+# swapped binary takes effect. Returns 0 if it restarted one, 1 if none found.
+restart_agent_service() {
+    if [ "$(uname -s)" = "Darwin" ]; then
+        if launchctl print "gui/$(id -u)/io.puck.agent" >/dev/null 2>&1; then
+            launchctl kickstart -k "gui/$(id -u)/io.puck.agent" >/dev/null 2>&1 && return 0
+        fi
+        if [ "$(id -u)" -eq 0 ] && launchctl print "system/io.puck.agent" >/dev/null 2>&1; then
+            launchctl kickstart -k "system/io.puck.agent" >/dev/null 2>&1 && return 0
+        fi
+        return 1
+    fi
+    if command -v systemctl >/dev/null 2>&1 && systemctl cat puck-agent.service >/dev/null 2>&1; then
+        systemctl restart puck-agent >/dev/null 2>&1 && return 0
+    fi
+    return 1
+}
+
+# _ver BIN — first line of "<BIN> --version", or "unknown". Avoids a
+# "<cmd> | head" pipeline (which trips `set -o pipefail` when the binary
+# writes more than one line and head closes the pipe early).
+_ver() {
+    local out
+    out="$("$1" --version 2>/dev/null || true)"
+    if [ -n "$out" ]; then printf '%s' "${out%%$'\n'*}"; else printf 'unknown'; fi
+}
+
 # ---------------- platform detection ----------------
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"
@@ -57,11 +100,13 @@ echo ""
 
 # ---------------- download ----------------
 fetch() { curl -fsSL --retry 2 --output "$WORK/$2" "$RELEASE_BASE/$1" || die "download failed: $1"; }
-say "Downloading binaries and setup scripts..."
+say "Downloading binaries..."
 fetch "$MCP_ASSET"       "$MCP_ASSET"
 fetch "$AGENT_ASSET"     "$AGENT_ASSET"
-fetch "setup-mcp.sh"     "setup-mcp.sh"
-fetch "install-agent.sh" "install-agent.sh"
+if [ "$UPGRADE" -eq 0 ]; then
+    fetch "setup-mcp.sh"     "setup-mcp.sh"
+    fetch "install-agent.sh" "install-agent.sh"
+fi
 
 # ---------------- verify ----------------
 if curl -fsSL --retry 2 --output "$WORK/SHA256SUMS" "$RELEASE_BASE/SHA256SUMS"; then
@@ -81,6 +126,35 @@ if curl -fsSL --retry 2 --output "$WORK/SHA256SUMS" "$RELEASE_BASE/SHA256SUMS"; 
     say "Checksums OK."
 else
     printf 'WARN: could not fetch SHA256SUMS — installing without checksum verification.\n' >&2
+fi
+
+# ---------------- upgrade: swap binaries in place, then stop ----------------
+if [ "$UPGRADE" -eq 1 ]; then
+    MCP_BIN="${PUCK_MCP_BIN:-$(command -v puck-mcp || true)}"
+    AGENT_BIN="${PUCK_AGENT_BIN:-$(command -v puck-agent || true)}"
+    { [ -x "$MCP_BIN" ] || [ -x "$AGENT_BIN" ]; } \
+        || die "nothing to upgrade — no puck-mcp or puck-agent found on PATH. Run install.sh (without --upgrade) first."
+    echo ""
+    if [ -x "$MCP_BIN" ]; then
+        _old="$(_ver "$MCP_BIN")"
+        install -m 0755 "$WORK/$MCP_ASSET" "$MCP_BIN"
+        say "puck-mcp:   $_old  ->  $(_ver "$MCP_BIN")  ($MCP_BIN)"
+    fi
+    if [ -x "$AGENT_BIN" ]; then
+        _old="$(_ver "$AGENT_BIN")"
+        install -m 0755 "$WORK/$AGENT_ASSET" "$AGENT_BIN"
+        say "puck-agent: $_old  ->  $(_ver "$AGENT_BIN")  ($AGENT_BIN)"
+    fi
+    echo ""
+    if restart_agent_service; then
+        say "Restarted the puck-agent service."
+    else
+        say "No puck-agent service detected — if the agent runs in the background, restart it yourself."
+    fi
+    say "Restart Claude Code so it picks up the new puck-mcp."
+    echo ""
+    say "Upgrade complete. Config, PKI, and enrollment are unchanged — no re-enroll needed."
+    exit 0
 fi
 
 # ---------------- install onto PATH ----------------
