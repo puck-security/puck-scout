@@ -180,6 +180,13 @@ run on host eng-laptop-47.
 The two skills are not autonomously chained — by design — to keep the
 "no autonomous network activity" boundary clear.
 
+Companion tool: [`geiger --live`](https://github.com/puck-security/geiger)
+is the operator-side one-shot for a fast liveness + capability read on a
+key, and the way to triage NON-AWS credentials surfaced alongside AWS
+ones. It runs read-only and out-of-band (not through Puck); this skill
+remains the deep AWS-IAM characterization. See the credential-exposure
+README's "Companion tool: geiger" section.
+
 ## Required allowlist additions
 
 `mcp/puck-mcp.yaml` for v1.0.0 includes the following AWS read-only

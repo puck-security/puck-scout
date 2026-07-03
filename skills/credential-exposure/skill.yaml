@@ -1,5 +1,5 @@
 name: credential-exposure
-version: "1.4.0"
+version: "1.5.0"
 description: "Discover credentials on developer endpoints (dotfiles, browsers, Electron apps, AI/MCP, cloud SSO, Windows DPAPI) and emit structured handoffs for downstream per-platform blast-radius skills."
 category: hunt
 
@@ -1167,6 +1167,38 @@ guidance:
     cache files and tokens for those platforms (Phases 5, 9, 12);
     when each blast-radius skill exists, add a matching handoff
     block here.
+
+    #### Geiger Blast-Radius Triage — operator-side (OPTIONAL, for any
+                                                     live-capable credential)
+
+    For credentials WITHOUT a dedicated *-blast-radius skill (GitHub /
+    GitLab PATs, GCP / Azure keys, Slack / Stripe / other API tokens,
+    DB connection strings, kubeconfigs, ~160 more), the companion tool
+    `geiger` answers "is it live, what does it reach, how bad" in one
+    read-only pass — filling the placeholder gap above TODAY. It runs
+    OPERATOR-SIDE, not through Puck: Puck redacted the secret and Puck's
+    agent is network-isolated, so geiger is a manual, out-of-band step
+    run WHERE THE CREDENTIAL LIVES (the endpoint) or after retrieving it
+    out-of-band. Emit this whenever a live-capable credential was
+    surfaced that no dedicated blast-radius handoff above already covers.
+
+    ```
+    # Requires geiger installed + authorization to triage the key.
+    # https://github.com/puck-security/geiger  (MIT, read-only by construction)
+    geiger --live <source path credential-exposure reported for this credential>
+    # examples:
+    #   geiger --live <home>/.config/gh/hosts.yml
+    #   cat <home>/.aws/credentials | geiger --live
+    #   geiger --live --env          # credential found in the environment
+    # Preview first without any network call: drop --live (dry-run prints
+    # the planned read-only calls). Add --json for machine-readable NDJSON.
+    ```
+
+    Reading geiger's verdict: tiers are CRITICAL / HIGH / MEDIUM / LOW /
+    INFO / DEAD (capability x reach x sensitivity). A "force multiplier"
+    (geiger marks these ⚠⚠) — a key that runs code, reads other secrets,
+    or restores backups — is the rotate-first queue. geiger never prints
+    the raw secret.
 
     ### MCP / AI Tool Token Inventory (REQUIRED)
     One row per AI/MCP tool path inspected in Phase 9, with status:

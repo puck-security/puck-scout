@@ -1,5 +1,5 @@
 name: access-history
-version: "1.0.0"
+version: "1.1.0"
 description: "Mine shell + REPL history for inline credentials and the user's access map (hosts, roles, clusters, vaults)"
 category: hunt
 
@@ -168,7 +168,14 @@ guidance:
 
     Investigate further if:
     - An inline secret was found — pivot to `credential-exposure` skill for
-      structured handoff to per-platform `*-blast-radius` skills.
+      structured handoff to per-platform `*-blast-radius` skills. For a
+      credential type with no dedicated blast-radius skill (GitHub / GitLab
+      PATs, GCP / Azure, API tokens, DB connection strings), the operator
+      can confirm liveness + blast radius out-of-band with
+      `geiger --live <source>` (see the credential-exposure report's Geiger
+      Blast-Radius Triage block) — this skill's objective notes a
+      credential only becomes "verified" via exactly such out-of-band
+      investigation.
     - A particularly broad-reach access pattern emerges (single user with
       ≥3 cloud accounts touched, or admin-tier role-assume chains) — flag
       for the IR engineer regardless of inline secret findings.
@@ -212,6 +219,13 @@ guidance:
     | Host | User | History file | Type | 4-char prefix | Source line# (redacted) |
     Group by fingerprint to surface cross-host reuse. Never emit the full
     secret value.
+
+    GEIGER TRIAGE (operator-side, optional): for each live-looking inline
+    secret, the operator can confirm whether it is still live and what it
+    reaches by running `geiger --live <the credential's real source>` on
+    the host where it lives (geiger is read-only and runs out-of-band, not
+    through Puck). See the credential-exposure report's Geiger Blast-Radius
+    Triage block for the full command shape and how to read geiger's tiers.
 
     ACCESS MAP (per-user, aggregated across hosts):
     - Clouds touched: AWS (accounts: X, Y), GCP (projects: …), Azure (tenants: …)

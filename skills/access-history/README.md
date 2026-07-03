@@ -47,6 +47,8 @@ The pathfinder strategy enforces this in the LLM prose, but it's not a code-leve
 
 Inline secret findings hand off to `credential-exposure` (and from there to `aws-blast-radius` for AWS creds). Access-map findings stand on their own — they're typically the report.
 
+Companion tool: for a live inline secret with no dedicated blast-radius skill, the operator can triage its blast radius out-of-band with [`geiger --live`](https://github.com/puck-security/geiger) — read-only, run where the credential lives. See the credential-exposure README's "Companion tool: geiger" section.
+
 ## Example invocation
 
 ```
