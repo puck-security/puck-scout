@@ -29,6 +29,7 @@ INSTALL_PREFIX=""
 SERVICE=""
 DOWNLOAD_BINARY=0
 UPGRADE=0
+SYSTEM=0
 SERVER_CA_FP=""
 
 usage() {
@@ -57,6 +58,8 @@ Optional:
   --download-binary     download puck-agent binary automatically (requires internet)
   --upgrade             swap this host's puck-agent for the latest release (verified),
                         restart the service, and skip enrollment. No other flags needed.
+  --system              privileged install: root-owned binary + system service
+                        (default is an unprivileged per-user install). Requires root.
 
 This script REFUSES to accept --token on argv.  Tokens on argv leak to ps,
 shell history, and parent process command lines.
@@ -74,6 +77,7 @@ while [[ $# -gt 0 ]]; do
         --service)     SERVICE="$2"; shift 2 ;;
         --download-binary) DOWNLOAD_BINARY=1; shift ;;
         --upgrade) UPGRADE=1; shift ;;
+        --system) SYSTEM=1; shift ;;
         --server-ca-fingerprint) SERVER_CA_FP="$2"; shift 2 ;;
         --token)
             echo "ERROR: --token on argv is rejected --see --token-file / --token-stdin." >&2
@@ -184,6 +188,13 @@ run_agent_upgrade() {
 if [[ "$UPGRADE" -eq 1 ]]; then
     run_agent_upgrade
     exit 0
+fi
+
+# --system is a privileged, persistent install (root-owned binary + system
+# service).  It requires root and must never silently escalate; fail fast.
+if [[ "$SYSTEM" -eq 1 && $EUID -ne 0 ]]; then
+    echo "ERROR: --system requires root; re-run with sudo." >&2
+    exit 3
 fi
 
 [[ -n "$SERVER" ]] || { echo "ERROR: --server is required" >&2; usage; }
@@ -401,6 +412,56 @@ unset TOKEN
 chmod 0700 "$PREFIX"
 
 # ---------------- install service ----------------
+
+# assert_exec_path_protected BIN — die unless BIN and its parent dir are
+# root-owned and NOT group/other-writable.  Load-bearing: it stops a root
+# service from executing a file a non-root user could swap out (privesc).
+# --system installs the binary into a root-owned dir so this passes by design.
+assert_exec_path_protected() {
+    local bin="$1" p owner perm dir
+    dir=$(dirname "$bin")
+    for p in "$bin" "$dir"; do
+        [[ -e "$p" ]] || { echo "ERROR: $p does not exist." >&2; exit 12; }
+        if [[ "$(uname -s)" = "Darwin" ]]; then owner=$(stat -f '%u' "$p"); perm=$(stat -f '%Lp' "$p")
+        else owner=$(stat -c '%u' "$p"); perm=$(stat -c '%a' "$p"); fi
+        [[ "$owner" -eq 0 ]] || { echo "ERROR: refusing to run a root service from non-root-owned $p." >&2; exit 12; }
+        [[ $(( 0$perm & 022 )) -eq 0 ]] || { echo "ERROR: refusing --$p is group/other-writable ($perm)." >&2; exit 12; }
+    done
+}
+
+# protected_bindir — echo a guaranteed root-owned, non-world-writable bin dir.
+# Linux: /usr/local/bin.  macOS: /usr/local/bin only if root-owned (Homebrew
+# often owns it), else a fresh root-owned /opt/puck/bin.
+protected_bindir() {
+    if [[ "$(uname -s)" = "Darwin" ]]; then
+        if [[ "$(stat -f '%u' /usr/local/bin 2>/dev/null)" = "0" ]] \
+           && [[ $(( 0$(stat -f '%Lp' /usr/local/bin 2>/dev/null || echo 777) & 022 )) -eq 0 ]]; then
+            echo /usr/local/bin
+        else
+            install -d -o 0 -g 0 -m 0755 /opt/puck/bin
+            echo /opt/puck/bin
+        fi
+    else
+        echo /usr/local/bin
+    fi
+}
+
+# Scope is chosen by --system, NOT by who is root.  Default = per-user service,
+# no escalation ever.  --system = system service: relocate the binary into a
+# root-owned dir and prove it isn't user-writable before a root service runs it.
+if [[ "$SYSTEM" -eq 1 ]]; then
+    SCOPE="system"
+    _bindir=$(protected_bindir)
+    if [[ "$(cd "$(dirname "$PUCK_AGENT_BIN")" && pwd)" != "$_bindir" ]]; then
+        install -m 0755 "$PUCK_AGENT_BIN" "$_bindir/puck-agent"
+        PUCK_AGENT_BIN="$_bindir/puck-agent"
+        echo "  [*] Installed binary to $PUCK_AGENT_BIN (root-owned)."
+    fi
+    assert_exec_path_protected "$PUCK_AGENT_BIN"
+else
+    SCOPE="user"
+fi
+
 if [[ -z "$SERVICE" ]]; then
     if [[ "$(uname -s)" = "Darwin" ]]; then SERVICE="launchd"
     elif command -v systemctl >/dev/null 2>&1; then SERVICE="systemd"
@@ -410,8 +471,9 @@ fi
 
 case "$SERVICE" in
     systemd)
-        UNIT="/etc/systemd/system/puck-agent.service"
-        cat > "$UNIT" <<UNIT
+        if [[ "$SCOPE" = "system" ]]; then
+            UNIT="/etc/systemd/system/puck-agent.service"
+            cat > "$UNIT" <<UNIT
 [Unit]
 Description=Puck endpoint agent
 After=network-online.target
@@ -423,51 +485,68 @@ ExecStart=$PUCK_AGENT_BIN serve --config $CONFIG_FILE
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
 
 [Install]
 WantedBy=multi-user.target
 UNIT
-        systemctl daemon-reload
-        systemctl enable --now puck-agent.service
+            systemctl daemon-reload
+            systemctl enable --now puck-agent.service
+        else
+            # Per-user service --no root, no system paths, runs as this user.
+            UDIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+            mkdir -p "$UDIR"
+            UNIT="$UDIR/puck-agent.service"
+            cat > "$UNIT" <<UNIT
+[Unit]
+Description=Puck endpoint agent (user)
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=$PUCK_AGENT_BIN serve --config $CONFIG_FILE
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target
+UNIT
+            systemctl --user daemon-reload 2>/dev/null || true
+            if systemctl --user enable --now puck-agent.service 2>/dev/null; then
+                loginctl enable-linger "$(id -un)" 2>/dev/null || true
+            else
+                echo "  [*] Could not start the per-user service (no 'systemctl --user' session)." >&2
+                echo "      Start it yourself: $PUCK_AGENT_BIN serve --config $CONFIG_FILE" >&2
+            fi
+        fi
         ;;
     launchd)
-        # Non-root operators cannot write to /Library/LaunchDaemons (system domain).
-        # Fall back to ~/Library/LaunchAgents (user/gui domain) when running without root.
-        #
-        # IMPORTANT: gui/$(id -u) launchd agents only run while the user has a
-        # GUI session.  SSH-only users (e.g., a headless mac mini accessed only
-        # via ssh) will NOT have launchd auto-start the agent at boot --only
-        # when they log in via the GUI.  For SSH-only deployments, run this
-        # script with sudo so it installs to the system domain (which DOES
-        # start at boot regardless of GUI sessions).  We warn here so it isn't
-        # a silent surprise.
-        if [[ $EUID -eq 0 ]]; then
+        # System scope -> /Library/LaunchDaemons (root; starts at boot, headless).
+        # User scope   -> ~/Library/LaunchAgents (gui/<uid>; GUI-session only).
+        # Capture stdout/stderr to a log — launchd otherwise discards it and
+        # background connection failures (cert SAN, unreachable server) are
+        # invisible.  See the "fleet is empty" troubleshooting entry.
+        if [[ "$SCOPE" = "system" ]]; then
             PLIST_DIR="/Library/LaunchDaemons"
             LAUNCHCTL_DOMAIN="system"
+            LOG_PATH="/Library/Logs/puck-agent.log"
         else
             PLIST_DIR="$HOME/Library/LaunchAgents"
             LAUNCHCTL_DOMAIN="gui/$(id -u)"
+            LOG_PATH="$HOME/Library/Logs/puck-agent.log"
             mkdir -p "$PLIST_DIR"
-            # Heuristic: SSH_CONNECTION set + no Aqua GUI session indicates
-            # we're being run by an SSH-only user.  Loginwindow is the macOS
-            # GUI session manager --if launchctl can't find it for this UID,
-            # the user has no GUI session.
-            if [[ -n "${SSH_CONNECTION:-}" ]]; then
-                if ! launchctl print "gui/$(id -u)" >/dev/null 2>&1; then
-                    LAUNCHD_NO_GUI=1
-                    echo "WARN: installed as a user-domain launchd agent (gui/$(id -u))," >&2
-                    echo "      but no GUI session was detected for this UID." >&2
-                    echo "      The agent will only auto-start when the user logs in via the GUI." >&2
-                    echo "      For headless/SSH-only deployments, re-run install-agent.sh under sudo" >&2
-                    echo "      so the agent installs in the system domain and starts at boot." >&2
-                fi
+            # gui/<uid> agents only run while the user has a GUI session; warn
+            # SSH-only users, who'd expect boot-time start (that needs --system).
+            if [[ -n "${SSH_CONNECTION:-}" ]] && ! launchctl print "gui/$(id -u)" >/dev/null 2>&1; then
+                LAUNCHD_NO_GUI=1
+                echo "WARN: installed as a user-domain launchd agent (gui/$(id -u))," >&2
+                echo "      but no GUI session was detected for this UID.  The agent will" >&2
+                echo "      only auto-start when the user logs in via the GUI.  For" >&2
+                echo "      headless/SSH-only hosts, re-run under sudo with --system." >&2
             fi
         fi
-        # Capture the agent's stdout/stderr to a log — otherwise launchd discards
-        # it and background connection failures (cert SAN, unreachable server) are
-        # invisible.  See the "fleet is empty" troubleshooting entry.
-        if [[ $EUID -eq 0 ]]; then LOG_PATH="/Library/Logs/puck-agent.log"
-        else LOG_PATH="$HOME/Library/Logs/puck-agent.log"; fi
         mkdir -p "$(dirname "$LOG_PATH")"
         PLIST="$PLIST_DIR/io.puck.agent.plist"
         cat > "$PLIST" <<PLIST
