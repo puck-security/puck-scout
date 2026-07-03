@@ -78,6 +78,14 @@ enum Cmd {
         #[arg(long)]
         server_ca_fingerprint: Option<String>,
     },
+    /// Check whether this agent can reach and TLS-verify its MCP server —
+    /// the same connection `serve` makes.  Read-only; connects only to the
+    /// configured mcp_server.
+    Doctor {
+        /// Path to puck-agent.yaml (defaults to the serve config path).
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
 }
 
 /// User home directory (per-platform env var lookup; no extra crate dep).
@@ -191,6 +199,10 @@ async fn main() -> anyhow::Result<()> {
             })
             .await?
         }
+        Cmd::Doctor { config } => {
+            let resolved = config.unwrap_or_else(resolved_serve_config);
+            doctor(&resolved).await
+        }
     }
 }
 
@@ -246,4 +258,204 @@ async fn serve(config_path: &std::path::Path) -> anyhow::Result<()> {
     );
 
     poll::run(config).await
+}
+
+/// `puck-agent doctor` — a read-only connection self-test. Reports config,
+/// client cert, and whether this agent can reach and TLS-verify its MCP
+/// server the SAME way `serve` does — so the "enrollment pins the CA and
+/// succeeds, but serve fails full hostname verification" cert/SAN class is
+/// diagnosed in one command. Connects ONLY to the configured mcp_server
+/// (network-isolation invariant) and makes a single read-only GET.
+async fn doctor(config_path: &std::path::Path) -> anyhow::Result<()> {
+    use std::time::{Duration, SystemTime};
+
+    println!("puck-agent doctor");
+    println!("=================\n");
+
+    if !config_path.exists() {
+        println!("config:   {}  [not found]", config_path.display());
+        anyhow::bail!(
+            "not enrolled: no agent config at {}. Run `puck-agent enroll --server https://<mcp>:50281 --hostname <name> --token …` first.",
+            config_path.display()
+        );
+    }
+    let config = match config::AgentConfig::load(config_path) {
+        Ok(c) => {
+            println!("config:   {}  [loaded]", config_path.display());
+            c
+        }
+        Err(e) => {
+            println!("config:   {}  [FAILED to load]", config_path.display());
+            return Err(e.context("load agent config"));
+        }
+    };
+    println!("server:   {}", config.mcp_server);
+    println!("identity: {}", config.hostname);
+
+    if !config.tls_cert_path.exists() {
+        println!("cert:     {}  [MISSING]", config.tls_cert_path.display());
+        anyhow::bail!(
+            "not enrolled: no client cert at {}. Run `puck-agent enroll …` first.",
+            config.tls_cert_path.display()
+        );
+    }
+    match std::fs::read(&config.tls_cert_path)
+        .map_err(anyhow::Error::from)
+        .and_then(|pem| renew::cert_validity(&pem))
+    {
+        Ok(v) => {
+            let now = SystemTime::now();
+            match v.not_after.duration_since(now) {
+                Ok(d) => println!("cert:     valid, expires in {}d", d.as_secs() / 86_400),
+                Err(_) => {
+                    let ago = now
+                        .duration_since(v.not_after)
+                        .map(|d| d.as_secs() / 86_400)
+                        .unwrap_or(0);
+                    println!(
+                        "cert:     EXPIRED {ago}d ago (serve auto-renews near expiry; else re-enroll)"
+                    );
+                }
+            }
+        }
+        Err(e) => println!("cert:     [could not read expiry: {e:#}]"),
+    }
+    println!();
+
+    println!(
+        "Connecting to {} (same TLS check as `serve`) …",
+        config.mcp_server
+    );
+    let client = poll::build_client(&config)?;
+    let url = format!("{}/v1/poll?agent_id={}", config.mcp_server, config.hostname);
+    match client
+        .get(&url)
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            println!(
+                "  [ok] connected — reachable, server cert verified, mTLS accepted (HTTP {}).",
+                resp.status().as_u16()
+            );
+            println!("\nHealthy: this agent can reach and authenticate to its MCP server.");
+            Ok(())
+        }
+        Err(e) => {
+            let (problem, fix) = classify_dial_error(&format!("{e:#}"), e.is_timeout());
+            println!("  [FAIL] {problem}");
+            if let Some(fix) = fix {
+                println!("\n  Fix: {fix}");
+            }
+            anyhow::bail!("agent cannot reach/verify its MCP server (see above)")
+        }
+    }
+}
+
+/// Map a failed serve-style dial to a human problem line and an optional
+/// fix. Kept pure (string in, strings out) so it is unit-testable against
+/// real rustls/reqwest error text. `err` is the flattened error
+/// (`format!("{e:#}")`); rustls 0.23 embeds the presented cert's valid
+/// names in a NotValidForName error, so surfacing `err` verbatim already
+/// tells the operator which SANs the cert covers.
+fn classify_dial_error(err: &str, is_timeout: bool) -> (String, Option<String>) {
+    let low = err.to_lowercase();
+    if low.contains("not valid for name") {
+        return (
+            format!(
+                "TLS verification failed — the server's certificate does not cover the address this agent dials:\n     {err}"
+            ),
+            Some(
+                "on the MCP host, add that address to the server cert, then restart Claude Code (or the puck-mcp service):\n         puck-mcp rotate-server-cert --add-san <the address above>\n       No re-enrollment needed — agents pin the CA, not the leaf cert."
+                    .to_string(),
+            ),
+        );
+    }
+    if low.contains("expired") {
+        return (
+            format!("TLS verification failed — the server's certificate is expired:\n     {err}"),
+            Some(
+                "renew the server cert on the MCP host (`puck-mcp rotate-server-cert`) and restart it."
+                    .to_string(),
+            ),
+        );
+    }
+    if low.contains("unknownissuer") || low.contains("invalid peer certificate") {
+        return (
+            format!(
+                "TLS verification failed — the server's certificate is not signed by the CA this agent pinned at enrollment:\n     {err}"
+            ),
+            Some(
+                "the server's CA changed (rotation, or a rebuilt server). Re-enroll this agent against the current server."
+                    .to_string(),
+            ),
+        );
+    }
+    if is_timeout {
+        return (
+            format!("timed out connecting to the server:\n     {err}"),
+            Some(
+                "check the server is up and reachable, and that inbound TCP to the agent port is open on the MCP host."
+                    .to_string(),
+            ),
+        );
+    }
+    (
+        format!("could not connect to the server:\n     {err}"),
+        Some(
+            "check the MCP server is running (it runs only while Claude Code is open, unless installed as a service), the address resolves from here, and the firewall allows the agent port."
+                .to_string(),
+        ),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify_dial_error;
+
+    #[test]
+    fn san_mismatch_diagnosed_with_add_san_fix() {
+        // The exact error a real user hit (rustls lists the cert's SANs).
+        let err = r#"error sending request for url (https://192.168.64.1:50281/v1/poll): client error (Connect): invalid peer certificate: certificate not valid for name "192.168.64.1"; certificate is only valid for DnsName("Raraku.local"), IpAddress(127.0.0.1), IpAddress(0::1) or IpAddress(192.168.64.5)"#;
+        let (problem, fix) = classify_dial_error(err, false);
+        assert!(problem.contains("does not cover the address"), "{problem}");
+        // The cert's actual SANs are surfaced verbatim.
+        assert!(problem.contains("Raraku.local"), "{problem}");
+        assert!(
+            fix.expect("fix expected")
+                .contains("rotate-server-cert --add-san"),
+            "fix should suggest add-san"
+        );
+    }
+
+    #[test]
+    fn unknown_issuer_is_ca_mismatch() {
+        let (problem, fix) = classify_dial_error("invalid peer certificate: UnknownIssuer", false);
+        assert!(problem.contains("not signed by the CA"), "{problem}");
+        assert!(fix.unwrap().to_lowercase().contains("re-enroll"));
+    }
+
+    #[test]
+    fn expired_server_cert_reported() {
+        let (problem, _) = classify_dial_error("invalid peer certificate: Expired", false);
+        assert!(problem.contains("expired"), "{problem}");
+    }
+
+    #[test]
+    fn timeout_reported() {
+        let (problem, fix) = classify_dial_error("operation timed out", true);
+        assert!(problem.contains("timed out"), "{problem}");
+        assert!(fix.is_some());
+    }
+
+    #[test]
+    fn connection_refused_is_unreachable() {
+        let (problem, fix) = classify_dial_error(
+            "client error (Connect): tcp connect error: Connection refused (os error 61)",
+            false,
+        );
+        assert!(problem.contains("could not connect"), "{problem}");
+        assert!(fix.is_some());
+    }
 }
