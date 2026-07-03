@@ -43,6 +43,15 @@ type Config struct {
 	ServerKeyPath     string   `yaml:"server_key_path"`
 	ServerCertSans    []string `yaml:"server_cert_sans"`
 	BootstrapTokenDir string   `yaml:"bootstrap_token_dir"`
+
+	// AllowTokenMinting gates whether the puck_enroll_instructions MCP tool
+	// may mint bootstrap tokens itself (returning a live single-use
+	// enrollment credential through the MCP client). Default false: the
+	// tool returns the generate-bootstrap-token command for an operator to
+	// run instead. This is a code-level gate, not an LLM-supplied flag, so
+	// a hostile or prompt-injected client cannot mint tokens on its own —
+	// see architectural invariant #8 (untrusted driving LLM).
+	AllowTokenMinting bool `yaml:"allow_token_minting"`
 }
 
 // ValidateTransportAuth fails fast on missing/bad transport-auth config.

@@ -83,6 +83,24 @@ func (r *Router) ToolDefinitions() []mcp.ToolDefinition {
 			},
 		},
 		{
+			Name:        "puck_enroll_instructions",
+			Description: "Get the exact steps to enroll a NEW endpoint agent against this Puck server, built from this server's real reachable address and CA fingerprint. Use when asked \"how do I add/install an agent on <host>\". Returns the address the endpoint must reach, the CA fingerprint to pin, and (by default) the generate-bootstrap-token command to run. With mint_token=true — and only if the operator enabled it server-side — it mints a one-time token and returns a ready-to-run install command.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"hostname": map[string]any{
+						"type":        "string",
+						"description": "The identity the new agent enrolls as (its cert CN) — an arbitrary label that must be identical in the token and the enroll command.",
+					},
+					"mint_token": map[string]any{
+						"type":        "boolean",
+						"description": "If true, mint a one-time bootstrap token and return a ready-to-run command (requires the operator to have set allow_token_minting). Default false: return the command for an operator to mint the token themselves.",
+					},
+				},
+				"required": []string{"hostname"},
+			},
+		},
+		{
 			Name:        "puck_get_skill_section",
 			Description: "Fetch a single section of the skill bound to an active investigation. Use this for sections puck_investigate intentionally omits to keep its response small: 'fleet_strategy' (call when you finish the pathfinder phase and are ready to fan out), 'remediation_guidance' (call when writing the final analysis), 'readme' (human-facing docs; rarely needed), 'full' (the whole skill body including README). The other section names — 'objective', 'pathfinder_strategy', 'iteration_criteria', 'analysis_template' — are also accepted but are already in puck_investigate's response.",
 			InputSchema: map[string]any{
@@ -263,6 +281,8 @@ func (r *Router) HandleToolCall(params mcp.ToolCallParams) mcp.ToolCallResult {
 		return r.handleListSkills()
 	case "puck_list_agents":
 		return r.handleListAgents()
+	case "puck_enroll_instructions":
+		return r.handleEnrollInstructions(params.Arguments)
 	case "puck_get_skill_section":
 		return r.handleGetSkillSection(params.Arguments)
 	default:
