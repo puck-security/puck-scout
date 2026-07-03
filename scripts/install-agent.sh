@@ -373,6 +373,7 @@ UNIT
             # the user has no GUI session.
             if [[ -n "${SSH_CONNECTION:-}" ]]; then
                 if ! launchctl print "gui/$(id -u)" >/dev/null 2>&1; then
+                    LAUNCHD_NO_GUI=1
                     echo "WARN: installed as a user-domain launchd agent (gui/$(id -u))," >&2
                     echo "      but no GUI session was detected for this UID." >&2
                     echo "      The agent will only auto-start when the user logs in via the GUI." >&2
@@ -381,6 +382,12 @@ UNIT
                 fi
             fi
         fi
+        # Capture the agent's stdout/stderr to a log — otherwise launchd discards
+        # it and background connection failures (cert SAN, unreachable server) are
+        # invisible.  See the "fleet is empty" troubleshooting entry.
+        if [[ $EUID -eq 0 ]]; then LOG_PATH="/Library/Logs/puck-agent.log"
+        else LOG_PATH="$HOME/Library/Logs/puck-agent.log"; fi
+        mkdir -p "$(dirname "$LOG_PATH")"
         PLIST="$PLIST_DIR/io.puck.agent.plist"
         cat > "$PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -397,6 +404,8 @@ UNIT
   </array>
   <key>KeepAlive</key><true/>
   <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>$LOG_PATH</string>
+  <key>StandardErrorPath</key><string>$LOG_PATH</string>
 </dict>
 </plist>
 PLIST
@@ -412,9 +421,18 @@ echo ""
 if [[ "$SERVICE" = "none" ]]; then
     echo "  [+] Enrolled (not started -- run manually):"
     echo "      puck-agent serve --config $CONFIG_FILE"
+elif [[ "${LAUNCHD_NO_GUI:-0}" -eq 1 ]]; then
+    echo "  [+] Enrolled, but NOT running yet: installed as a user launchd agent and no"
+    echo "      GUI session was detected, so it starts only at the next GUI login."
+    echo "      Run it now:    puck-agent serve --config $CONFIG_FILE"
+    echo "      Headless box?  Re-run install-agent.sh under sudo (installs a boot service)."
 else
     echo "  [+] Enrolled and running via $SERVICE"
 fi
 echo ""
 echo "  Config: $CONFIG_FILE"
+case "$SERVICE" in
+    launchd) echo "  Log:    ${LOG_PATH:-$HOME/Library/Logs/puck-agent.log}  (tail -f to watch it connect)" ;;
+    systemd) echo "  Log:    journalctl -u puck-agent -f" ;;
+esac
 echo ""
