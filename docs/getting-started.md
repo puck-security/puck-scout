@@ -43,6 +43,24 @@ That does Steps 1–3 for you, so skip to [Step 4](#step-4-investigate-and-revie
 it finishes. (Set `PUCK_BIN_DIR` to change the install location, or `PUCK_PREFIX`
 to try it against a scratch config dir.)
 
+**Unprivileged by default.** The installer runs entirely as your user — binaries in
+`~/.local/bin`, config under `~/.config`, and a *per-user* service (a `launchd`
+LaunchAgent on macOS, a `systemctl --user` unit on Linux). It never uses `sudo` and
+never installs a root service, so trying Puck needs no elevated privileges.
+
+For a persistent, privileged deployment — binaries in a root-owned path
+(`/usr/local/bin`, or `/opt/puck/bin` on a Homebrew macOS) and a system service that
+starts at boot — add `--system` (requires root):
+
+```bash
+curl -fsSL https://github.com/puck-security/puck-scout/releases/latest/download/install.sh | sudo bash -s -- --system
+```
+
+`--system` installs binaries to a root-owned location on purpose: a root service must
+never execute a user-writable file (that would be a privilege-escalation path — a
+non-root user could swap the binary and gain root). The default per-user install
+sidesteps this entirely, because the service runs as you.
+
 This is **all-in-one on one machine** — MCP server *and* agent on the same host. To
 add *other* machines as agents, use [Step 3](#step-3-enroll-an-agent); to make a box
 a plain agent with no local server, see
@@ -391,9 +409,11 @@ Mixing a release-vintage server with a locally-built agent is the usual cause of
 An upgrade is **swap the binary and restart** — enrollment material survives on
 disk, so upgrades never re-enroll agents.
 
-**One command** — downloads the latest binaries, SHA256-verifies them, swaps them in
-place (config/PKI untouched), and restarts the agent service. On the all-in-one host
-(swaps both `puck-mcp` and `puck-agent`):
+**One command** — downloads the latest binaries, verifies them (SHA-256 always, plus
+the cosign signature on `SHA256SUMS` when `cosign` is installed) and **refuses to
+proceed if verification fails or `SHA256SUMS` can't be fetched**, swaps them in place
+(config/PKI untouched), and restarts the agent service. On the all-in-one host (swaps
+both `puck-mcp` and `puck-agent`):
 
 ```bash
 curl -fsSL https://github.com/puck-security/puck-scout/releases/latest/download/install.sh | bash -s -- --upgrade
