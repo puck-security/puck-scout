@@ -31,7 +31,7 @@
 │  engine, fans out to agents, writes audit log before   │
 │  every command, enforces cost caps                     │
 └─────────┬──────────────┬──────────────┬──────────────┘
-          │ mTLS poll     │              │
+          │ mTLS          │              │
           v              v              v
      ┌─────────┐   ┌─────────┐   ┌─────────┐
      │ Agent   │   │ Agent   │   │ Agent   │   Rust binaries.
@@ -39,7 +39,23 @@
      └─────────┘   └─────────┘   └─────────┘   write to disk.
 ```
 
-**Investigation flow**: pathfinder → checkpoint → fleet → iterate → analyze → save (persisted to `investigations/`). See [Architecture](docs/architecture.md) for what each stage does.
+**Investigation flow**: pathfinder → checkpoint → fleet → iterate → analyze → save (persisted to `investigations/`). See [Architecture](docs/architecture.md).
+
+## Quick Start
+
+Try Puck on one machine (macOS/Linux) — the installer downloads both binaries, sets up the MCP server, registers Puck with Claude Code, and enrolls this machine as an agent:
+
+```bash
+curl -fsSL https://github.com/puck-security/puck-scout/releases/latest/download/install.sh | bash
+```
+
+Then open Claude Code and ask:
+
+```
+Use puck to check this host for credential exposure
+```
+
+Installing the agent on **another** machine, or building from source? See **[Getting Started](docs/getting-started.md)**.
 
 ## MCP Tools
 
@@ -55,108 +71,34 @@
 
 Full schemas in [reference.md](docs/reference.md).
 
-## Components
+## What's in here
 
-- **Endpoint Agent** (Rust, `agent/`) — read-only command executor on the endpoint. Native binaries for Linux, macOS, and Windows (amd64 + arm64).
-- **MCP Server** (Go, `mcp/`) — orchestrates investigations: loads skills, validates commands, fans out to agents, writes the audit log.
-- **Skills Library** (YAML, `skills/`) — investigation playbooks. Contribute a new one without writing Rust or Go.
-
-## Quick Start
-
-Install the server, enroll an endpoint, investigate. Download binaries from [GitHub Releases](https://github.com/puck-security/puck-scout/releases/latest).
-
-**1. Set up the MCP server** (your workstation or an ops box)
-
-```bash
-# Install puck-mcp onto PATH, then:
-bash <(curl -fsSL https://raw.githubusercontent.com/puck-security/puck-scout/main/scripts/setup-mcp.sh) \
-  --hostname $(hostname)
-```
-
-This generates a CA, server cert, and config. If the `claude` CLI is installed, it auto-registers Puck as an MCP server — no manual config needed. Otherwise it prints the command to register manually.
-
-> **Roaming MCP host** (laptop, dynamic IP)? Pass a stable `--hostname` (Tailscale / DDNS / static) so agents don't lose the server — see [Getting Started](docs/getting-started.md). If the address changes after enrollment, `puck-mcp rotate-server-cert --add-san <name-or-ip>` fixes it without re-enrolling.
-
-**2. Enroll an endpoint**
-
-```bash
-# On the server: generate a one-time bootstrap token
-puck-mcp generate-bootstrap-token --hostname eng-laptop-47
-
-# On the endpoint: install + enroll (token-safe pattern; full details in docs/getting-started.md):
-TF=$(mktemp /tmp/puck-bt.XXXXXX) && chmod 600 "$TF"
-printf 'Paste puck-bt-… (hidden): '; read -rs T; echo; printf '%s' "$T" > "$TF"; unset T
-bash <(curl -fsSL https://raw.githubusercontent.com/puck-security/puck-scout/main/scripts/install-agent.sh) \
-  --server https://your-server:50281 \
-  --hostname eng-laptop-47 \
-  --token-file "$TF" \
-  --download-binary
-shred -u "$TF" 2>/dev/null || rm -f "$TF"
-```
-
-**3. Investigate**
-
-Open Claude Code and ask:
-
-```
-Use puck to check eng-laptop-47 for credential exposure
-```
-
-Repeat step 2 for every endpoint you want to investigate. For fleet enrollment (10+ hosts), see [Getting Started](docs/getting-started.md#multiple-hosts-fleet-enrollment).
-
-> **Local dev?** To try Puck on your own machine without deploying anything: `cd test && make test-install && make run-agent`, then ask Claude Code a question. See [Getting Started](docs/getting-started.md).
-
-For tool schemas, config fields, and CLI docs, see [Reference](docs/reference.md).
-
-## Privacy
-
-Puck sends endpoint findings (process lists, file paths, network connections, credential exposure results) to Claude for analysis. **Do not run Puck under a Free, Pro, or Max Claude.ai account without first disabling model training** — those plans use conversation data to train models by default, with 5-year retention.
-
-| Auth method | Training by default | Safe for sensitive data |
-|---|---|---|
-| Anthropic API key (`ANTHROPIC_API_KEY`) | No — commercial terms always apply | Yes |
-| Claude Code OAuth — Teams or Enterprise plan | No — commercial terms apply | Yes |
-| Claude Code OAuth — Free, Pro, or Max plan | **Yes, unless opted out** | Only after opting out |
-
-If you are on a Free, Pro, or Max plan and cannot switch, opt out at [claude.ai/settings/data-privacy-controls](https://claude.ai/settings/data-privacy-controls) before running any investigation. The API or a Teams/Enterprise plan is strongly preferred for production use.
-
-See [Anthropic's data usage documentation](https://code.claude.com/docs/en/data-usage) for the authoritative policy.
+- **`agent/`** — endpoint agent (Rust): the read-only command executor. Native binaries for Linux, macOS, and Windows (amd64 + arm64).
+- **`mcp/`** — MCP server (Go): loads skills, validates commands against the policy engine, fans out to agents, writes the audit log.
+- **`skills/`** — investigation playbooks (YAML). Contribute one without writing Rust or Go — see [contributing.md](docs/contributing.md).
+- `docs/` · `integrations/` (TheHive, Tines) · `demo/` — docs, third-party integrations, and local-testing scripts.
 
 ## Safety Model
 
-One shared typed allowlist (`policy/policy.toml`, embedded into both binaries) is enforced independently by the server (before dispatch) and the agent (before execution). Anything outside the compiled-in grammar is rejected — a compromised server cannot instruct the agent to run anything new. Operators can enable/disable existing entries via `/etc/puck/policy-overrides.toml`; adding new binaries requires a PR. **The worst case of a Puck compromise is unauthorized read access, not unauthorized modification.**
+One shared typed allowlist (`policy/policy.toml`, compiled into both binaries) is enforced independently by the server (before dispatch) and the agent (before execution). Anything outside the grammar is rejected — a compromised server cannot make the agent run anything new. **The worst case of a Puck compromise is unauthorized read access, not modification.** Full threat model in [security.md](docs/security.md).
 
-**EDR and endpoint security tools may flag puck-agent.** The agent reads sensitive files (process memory maps, keychains, credential files, network connections), so the same signals that make it useful for IR can trip heuristics in security products. If you're deploying alongside an EDR, allowlist the `puck-agent` binary before enrolling endpoints — a false positive from your own IR tooling mid-investigation is a bad time.
+**EDR may flag puck-agent.** It reads sensitive files (process maps, keychains, credential stores), so the signals that make it useful for IR can trip endpoint-security heuristics. Allowlist the `puck-agent` binary before enrolling endpoints that run an EDR.
 
-See [docs/security.md](docs/security.md) for the full threat model.
+## Privacy
 
-## Project Layout
+Puck sends endpoint findings to Claude for analysis. **Do not run Puck under a Free, Pro, or Max Claude.ai account without first disabling model training** — those plans train on conversation data by default, with 5-year retention.
 
-```
-puck-scout/
-  agent/          Rust endpoint agent
-  mcp/            Go MCP server
-  skills/         Investigation playbooks (YAML)
-  demo/           Demo scripts for local testing
-  docs/           Architecture, security model, ADRs, getting started
-  integrations/   Third-party integrations (TheHive, Tines)
-```
+| Auth method | Trains on your data by default? |
+|---|---|
+| Anthropic API key (`ANTHROPIC_API_KEY`) | No — commercial terms |
+| Claude Code OAuth — Teams / Enterprise | No — commercial terms |
+| Claude Code OAuth — Free / Pro / Max | **Yes**, unless [opted out](https://claude.ai/settings/data-privacy-controls) |
+
+The API or a Teams/Enterprise plan is strongly preferred for production. See [Anthropic's data-usage policy](https://code.claude.com/docs/en/data-usage).
 
 ## Enterprise / Hosted
 
-Puck Scout is the open-source investigation core under the MIT license — free to use, modify, and self-host.  For teams that want more than self-hosted:
-
-| | OSS (this repo) | Puck Security (hosted) |
-|---|---|---|
-| MCP server | Self-hosted | Managed multi-tenant brain |
-| SSO + RBAC | DIY | Built-in (Okta, Azure AD, Google) |
-| Multi-tenant fleet-of-fleets | One fleet per server | Yes, with per-tenant audit isolation |
-| Compliance attestations | None | SOC 2 Type II + HIPAA-aligned |
-| Team-built skills | YAML, contribute via PR | Custom skills built + maintained by Puck team |
-| Investigation runbooks | Self-write | Tabletop-tested, IR-engineer-reviewed |
-| Support | GitHub issues | 24×7 with SLA |
-
-Go to **[puck.security/enterprise](https://puck.security/enterprise)**
+Puck Scout is the MIT-licensed investigation core — free to use, modify, and self-host. A managed multi-tenant service (SSO + RBAC, per-tenant audit isolation, team-maintained skills, SOC 2 Type II + HIPAA-aligned, 24×7 support) is at **[puck.security/enterprise](https://puck.security/enterprise)**.
 
 ## Documentation
 
@@ -165,17 +107,11 @@ Go to **[puck.security/enterprise](https://puck.security/enterprise)**
 - [Reference](docs/reference.md) — tool schemas, config fields, skill YAML, CLI
 - [Architecture](docs/architecture.md) — system design and data flow
 - [Security Model](docs/security.md) — threat model + deployment recommendations
-- [Operations Guide](docs/operations.md) — PKI recovery, CA rotation, policy migration
-- [Contributing](docs/contributing.md) — skills, bug fixes, features
-
-## Contributing
-
-The easiest way to contribute is a new investigation skill. Skills are YAML -- no Rust or Go required. See [docs/contributing.md](docs/contributing.md).
+- [Operations](docs/operations.md) — PKI recovery, CA rotation, policy migration
+- [Contributing](docs/contributing.md) — the easiest contribution is a new YAML skill
 
 ## License
 
-MIT.  See [LICENSE](LICENSE).
-
-Contributors sign a CLA on first PR — see [CLA.md](CLA.md).
+MIT — see [LICENSE](LICENSE). Contributors sign a [CLA](CLA.md) on first PR.
 
 Copyright (c) 2026 Puck Security, Inc.

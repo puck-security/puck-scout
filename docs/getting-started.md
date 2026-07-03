@@ -1,37 +1,57 @@
 # Getting Started with Puck
 
-Install the MCP server on your workstation, enroll endpoints, and run your first investigation. **Time**: ~10 minutes for one endpoint, ~15 with a fleet.
+Install the MCP server on your workstation, enroll one or more endpoints, and run
+your first investigation. **~10 minutes for one host.**
 
-> **Just want to kick the tires?** Build from source and test locally without deploying anything:
-> ```bash
-> git clone https://github.com/puck-security/puck-scout.git
-> cd puck-scout/test && make test-install && make run-agent
-> ```
-> Then open Claude Code in the `puck-scout` directory and ask a question. `make stop` tears down, `make clean` removes everything. Requires [Rust](https://rustup.rs/) and [Go 1.22+](https://go.dev/dl/).
+Two things vary, and they're independent:
 
----
+- **How you get Puck** — a [one-command installer](#one-command-local-macoslinux)
+  for a single macOS/Linux host, [prebuilt binaries from Releases](#from-releases-manual)
+  for anything else, or [built from source](#build-from-source). Either way you end
+  up with `puck-mcp` and `puck-agent` on your `PATH`.
+- **Where things run** — everything on **one machine** (local tire-kick), or the
+  **MCP server on your workstation and agents on remote hosts**. The steps are the
+  same; a **Local** / **Remote** note calls out the few values that differ.
 
-## Which doc do you want?
+## Pick your path
 
-Puck has four user-facing docs.  Pick the one that matches your goal:
-
-| If you want to... | Read |
+| If you want to... | Go to |
 |---|---|
-| Install Puck on your own machine and run a query, end-to-end | **This guide.** |
-| Follow a worked incident-response investigation (Trivy-breach scenario) | [tutorial.md](tutorial.md) |
-| Look up CLI flags, config fields, MCP tool schemas, skill YAML schema | [reference.md](reference.md) |
-| Understand the architecture, trust boundaries | [architecture.md](architecture.md) + [security.md](security.md) |
-| Recover from a broken state (lost CA, stuck lock, policy migration) | [operations.md](operations.md) |
-
-If you have prebuilt binaries already, **skip to [Step 1](#step-1-set-up-the-mcp-server-operator-workstation-one-time)** — Step 0 below is binary-install only.  If you're building from source, jump to [Building from Source](#building-from-source) at the bottom, then return to Step 1.
+| Try Puck on one machine (macOS/Linux), fastest | [One-command install](#one-command-local-macoslinux) — done in one step |
+| Deploy to real endpoints | [Manual install](#from-releases-manual) → Steps 1–4 (**Remote** notes) + [Fleet enrollment](#fleet-enrollment) |
+| Build and run from source | [Build from Source](#build-from-source) → Steps 1–4 |
+| Look up flags / config / tool schemas | [reference.md](reference.md) |
+| Understand the design / trust model | [architecture.md](architecture.md) · [security.md](security.md) |
+| Recover a broken state (lost CA, cert renewal, CA rotation) | [operations.md](operations.md) |
 
 ---
 
-## Quick Start
+## Step 0: Get the binaries
 
-### Step 0: Install the binaries
+End state: `puck-mcp` and `puck-agent` on your `PATH`.
 
-Download prebuilt binaries from [GitHub releases](https://github.com/puck-security/puck-scout/releases/latest) — pick the right file for your platform.  **All six platforms are first-class** — the agent runs natively on Linux, macOS, and Windows, and `puck-mcp` builds for the same six targets:
+### One command (local, macOS/Linux)
+
+The quickest path for a single host — downloads both binaries, sets up the MCP
+server, registers Puck with Claude Code, and enrolls this machine as an agent:
+
+```bash
+curl -fsSL https://github.com/puck-security/puck-scout/releases/latest/download/install.sh | bash
+```
+
+That does Steps 1–3 for you, so skip to [Step 4](#step-4-investigate-and-review) once
+it finishes. (Set `PUCK_BIN_DIR` to change the install location, or `PUCK_PREFIX`
+to try it against a scratch config dir.)
+
+This is **all-in-one on one machine** — MCP server *and* agent on the same host. To
+add *other* machines as agents, use [Step 3](#step-3-enroll-an-agent); to make a box
+a plain agent with no local server, see
+[Remove or re-point an agent](#remove-or-re-point-an-agent).
+
+### From Releases (manual)
+
+For a remote endpoint, a specific platform, or when you'd rather run each step
+yourself. Download the two binaries for your platform:
 
 | Platform | puck-mcp | puck-agent |
 |----------|----------|------------|
@@ -42,80 +62,84 @@ Download prebuilt binaries from [GitHub releases](https://github.com/puck-securi
 | Windows x86\_64 | `puck-mcp-windows-amd64.exe` | `puck-agent-windows-amd64.exe` |
 | Windows arm64 | `puck-mcp-windows-arm64.exe` | `puck-agent-windows-arm64.exe` |
 
-Windows release binaries use the MSVC toolchain and are fully self-contained — no `libunwind.dll` or other runtime DLLs. (The libunwind note under [Building from Source](#building-from-source) applies only to local llvm-mingw cross-compiles on macOS — ignore it for released binaries.)
-
-**Install with `install(1)`, not `cp`.** On macOS Sequoia, files copied with
-`cp` inherit a provenance attribute that Apple Security Policy can use to
-silently block execution (see Troubleshooting at the bottom of this guide).
-`install` creates a fresh inode that ASP treats normally.
+macOS Apple Silicon shown — substitute your platform's asset names:
 
 ```bash
-# macOS: strip Gatekeeper quarantine + provenance before installing.
-xattr -d com.apple.quarantine puck-mcp-darwin-*  puck-agent-darwin-*  2>/dev/null
-xattr -d com.apple.provenance puck-mcp-darwin-*  puck-agent-darwin-*  2>/dev/null
-
-# macOS / Linux: install onto $PATH
-install -m 0755 puck-mcp-<os>-<arch>   ~/.local/bin/puck-mcp
-install -m 0755 puck-agent-<os>-<arch> ~/.local/bin/puck-agent
+base=https://github.com/puck-security/puck-scout/releases/latest/download
+curl -fsSLO "$base/puck-mcp-darwin-arm64"
+curl -fsSLO "$base/puck-agent-darwin-arm64"
+mkdir -p ~/.local/bin
+install -m 0755 puck-mcp-darwin-arm64   ~/.local/bin/puck-mcp
+install -m 0755 puck-agent-darwin-arm64 ~/.local/bin/puck-agent
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
-For Windows, move `puck-mcp-windows-<arch>.exe` and `puck-agent-windows-<arch>.exe`
-into `%USERPROFILE%\.local\bin\` (or anywhere on `PATH`), or set
-`PUCK_MCP_BIN` / `PUCK_AGENT_BIN` to their absolute paths.
+Make sure `~/.local/bin` is on your `PATH` (the last line adds it for the current
+shell; add it to your shell rc to persist).
 
-To build from source instead, see [Building from Source](#building-from-source) at the bottom of this guide.
+> **macOS note.** `curl`-downloaded binaries run as-is — no `xattr` needed. Two
+> gotchas bite only elsewhere: files downloaded via a **browser** carry a Gatekeeper
+> quarantine (clear it with `xattr -d com.apple.quarantine <file>`), and binaries
+> **`cp`-ed from a build dir** on Sequoia can inherit a provenance attribute that
+> blocks execution. `install` (used above) and `mv` both sidestep that — don't use
+> `cp`. `install` ships with macOS and Linux; if it's ever missing, `chmod +x <file>
+> && mv <file> ~/.local/bin/…` is the equivalent. Windows binaries are self-contained
+> `.exe`s — put them on `PATH`, or set `PUCK_MCP_BIN` / `PUCK_AGENT_BIN`.
 
-### Two secrets, two channels
+Then continue at [Step 1](#step-1-set-up-the-mcp-server).
 
-Puck has **two distinct secrets**.  Mixing them up is the #1 cause of
-silent-failure during setup.
+### From source
 
-| Secret | What it authorises | Lives where | Distribute how |
-|---|---|---|---|
-| `mcp_token` | The **MCP client** (Claude Code) talking to **puck-mcp**.  Set once at setup, used for every Claude Code session.  Long-lived. | `~/.config/puck-mcp/puck-mcp.yaml` on the operator workstation (mode 0600).  Also in `.mcp.json` (don't commit). | Stays on the operator workstation.  Never leaves it. |
-| bootstrap token (`puck-bt-…`) | A specific **endpoint** enrolling its mTLS client cert with the **server**.  One-time, single-use, hostname-bound, default 4h TTL (tune with `--ttl`). | Generated on the fly; never persisted in plaintext (only SHA-256 hash in ledger). | Transmit out-of-band to the endpoint operator (SSH, secret store, secure paste).  Discard after enrollment. |
+See [Build from Source](#build-from-source) at the bottom (Rust + Go), then continue
+at Step 1. Fastest end-to-end check from a clone:
+`cd test && make test-install && make run-agent`.
 
-If you see "Claude Code can't talk to puck-mcp", suspect `mcp_token`.
-If you see "agent fails to enroll", suspect bootstrap token (expired,
-already spent, wrong hostname).
+---
 
-### Step 1: Set up the MCP server (operator workstation, one-time)
+## Step 1: Set up the MCP server
 
-#### First — choose a deployment pattern
-
-Agents pin the MCP server's address (hostname or IP) at enrollment and TLS-verify it against the server cert's SANs, so **if that address changes, agents lose connectivity.** `puck-mcp rotate-server-cert` can add SANs later without re-enrolling (see [operations.md](operations.md#server-reachability-changes-ip-or-hostname-change)), but it's cleanest to pick a stable pattern now:
-
-- **Mesh-networked operator host (recommended for laptops).** Run [Tailscale](https://tailscale.com/) (or WireGuard / ZeroTier / Nebula): each device gets a stable address + MagicDNS name that survives any network change. Pass the mesh name as `--hostname` and the name + IP in `--server-cert-sans`:
-  ```bash
-  bash setup-mcp.sh --hostname mybox.tail-abc123.ts.net \
-                    --server-cert-sans mybox.tail-abc123.ts.net,100.64.0.5,127.0.0.1,::1
-  ```
-- **DDNS for a home server with dynamic public IP.** Use `ddclient` (or a router-builtin) against duckdns.org, he.net, Cloudflare, etc. Pass the DDNS hostname as `--hostname` and `--server-cert-sans`. Agents resolve the current public IP on every reconnect — DNS handles the rotation.
-- **Static IP/hostname for ops boxes.** A VPS, homelab box, or any always-on host with stable addressing. Pass the hostname or IP directly. This is the implicit assumption if you don't think about it; only safe when the address really doesn't change.
-- **mDNS `<host>.local` for same-LAN testing.** macOS Bonjour and Windows mDNSResponder advertise `<host>.local` on the local broadcast domain. Get the name from `scutil --get LocalHostName` (macOS) or `hostname` (Linux/Windows) and pass it as both `--hostname` and `--server-cert-sans`. Stable across LAN-local IP changes; does not traverse subnets, NAT, or VPNs. Useful for quick tests with a VM on the same LAN — not suitable for fleet ops.
-
-If you're not sure, pick the mesh pattern. Tailscale has a free personal tier, works through NAT without port forwarding, and removes the entire IP-roaming problem.
-
-#### Run setup-mcp.sh
-
-`setup-mcp.sh` requires `puck-mcp` to be on `PATH`. If the binary is in a non-standard location, set `PUCK_MCP_BIN=/absolute/path/to/puck-mcp` before running.
+On the workstation that will run Claude Code. `setup-mcp.sh` generates the CA +
+server cert, writes `mcp_token` and a ready-to-use config at
+`~/.config/puck-mcp/puck-mcp.yaml`, registers Puck with Claude Code, and prints the
+CA fingerprint. It needs `puck-mcp` on `PATH` (from Step 0).
 
 ```bash
-curl -fsSL https://github.com/puck-security/puck-scout/releases/latest/download/setup-mcp.sh | \
-  bash -s -- --hostname puck-mcp.internal
+curl -fsSLO https://github.com/puck-security/puck-scout/releases/latest/download/setup-mcp.sh
+bash setup-mcp.sh --hostname $(hostname)
 ```
 
-The script:
-- Verifies `puck-mcp` is present on `PATH` (or `$PUCK_MCP_BIN`)
-- Generates a private CA and server certificate for mTLS (stored under `~/.config/puck-mcp/`)
-- Generates the `mcp_token` (required for Claude Code connections)
-- Writes a ready-to-use config at `~/.config/puck-mcp/puck-mcp.yaml`
-- Prints the CA fingerprint and `.mcp.json` snippet to add to Claude Code
-- **Saves `ca.pem` in the config directory** — you'll distribute this to endpoints
+- **Local** (one host): the [one-command installer](#one-command-local-macoslinux)
+  already ran this. Doing it by hand, `--hostname $(hostname)` is fine — loopback
+  (`127.0.0.1`) is always in the cert SANs.
+- **Remote** (agents on other hosts): the address agents dial is pinned into the
+  cert at enrollment, so pick one that's **stable**, and pass it as `--hostname`
+  (add extra names/IPs with `--server-cert-sans a,b,127.0.0.1,::1`):
+  - **Tailscale / WireGuard mesh** *(recommended for laptops)* — a MagicDNS name
+    that survives network changes and NAT. `--hostname mybox.tail-abc123.ts.net`.
+  - **DDNS** for a home server with a dynamic public IP.
+  - **Static IP / hostname** for a VPS or always-on ops box.
+  - **mDNS `<host>.local`** for a VM on the same LAN (quick tests only).
 
-### Step 2: Configure Claude Code
+  If the address ever changes, `puck-mcp rotate-server-cert --add-san <name-or-ip>`
+  adds it **without re-enrolling** agents (they pin the CA, not the leaf). See
+  [operations.md → reachability changes](operations.md#server-reachability-changes-ip-or-hostname-change).
 
-Paste the snippet printed by the setup script into `~/.mcp.json` (global) or `.mcp.json` in your project root:
+> **Two secrets, don't mix them up** — the #1 cause of silent setup failures:
+>
+> | Secret | Authorizes | Lives | Distribute |
+> |---|---|---|---|
+> | `mcp_token` | Claude Code → `puck-mcp` | operator workstation config (0600) | never leaves it |
+> | bootstrap token (`puck-bt-…`) | one endpoint enrolling its client cert | generated on demand, single-use, host-bound, ~4h TTL | out-of-band to the endpoint, then discard |
+>
+> "Claude Code can't reach puck" → suspect `mcp_token`.
+> "Agent won't enroll" → suspect the bootstrap token (expired, spent, wrong host).
+
+## Step 2: Connect Claude Code
+
+If the `claude` CLI is on `PATH`, `setup-mcp.sh` already registered Puck
+(`claude mcp add --scope user puck …`) — open Claude Code and type `/mcp` to
+confirm `puck` is listed. Otherwise it printed the command to run; or add it by
+hand to `~/.mcp.json` (global) or `.mcp.json` in your project:
 
 ```json
 {
@@ -128,163 +152,193 @@ Paste the snippet printed by the setup script into `~/.mcp.json` (global) or `.m
 }
 ```
 
-The script prints the exact paths for your machine — copy the output directly.
+Use the absolute paths `setup-mcp.sh` printed. Claude Code connects over **stdio**
+only; the HTTP+SSE MCP-client transport is not a working path today.
 
-Once configured, type `/mcp` in Claude Code to confirm `puck` is listed and see all available tools. The current tool surface is:
+## Step 3: Enroll an agent
 
-- `puck_investigate` — start an investigation. Returns connected agents, a compact policy-engine summary, and the *initial* skill context (objective, pathfinder strategy, iteration criteria, analysis template). Later sections of the skill are fetched on demand.
-- `puck_list_skills` — list every skill the server loaded (name, version, category, inputs, **plus `status` + `missing_commands`** when the compiled-in policy grammar doesn't cover what a skill needs).
-- `puck_get_skill_section` — fetch a specific skill section (`fleet_strategy`, `remediation_guidance`, `readme`, `full`, or any of the starter sections) on demand. Used by skills that paginate their body so the initial response stays small.
-- `puck_run_check` — run a single read-only command on one endpoint.
-- `puck_query_fleet` — fan out a command across multiple endpoints in parallel.
-- `puck_save_analysis` — save the final report as markdown.
-- `puck_continue` — extend the command budget when an investigation needs more turns.
+The [one-command installer](#one-command-local-macoslinux) already enrolled **this**
+machine. This step is for enrolling **other** endpoints — repeat it per host you
+want to investigate.
 
-The server also exposes MCP **resources** (advertised in `initialize` as `resources: {}`). MCP clients that implement `resources/list` and `resources/read` can fetch the full skill body or any section via `puck://skill/<name>[/section]` URIs without spending a tool-call slot. Tools-only clients use `puck_get_skill_section` instead — both surfaces map to the same underlying lookup.
+> **Enrollment is a live mTLS handshake**, so a `puck-mcp` must be serving `:50281`
+> when you enroll. Your MCP server provides it — either Claude Code's stdio
+> `puck-mcp` (open Claude Code first) or a `puck-mcp` service. Only one `puck-mcp`
+> may bind `:50281` per host, so don't run a service *and* Claude Code's stdio
+> server on the same host (that's what `--service none` avoids).
 
-### Step 3: Issue bootstrap tokens and install agents on endpoints
+### On a different machine (a VM or second host)
 
-For each endpoint you want to investigate, start by issuing a single-use bootstrap token on the MCP server host:
+The endpoint needs only `puck-agent`. First make sure it can **reach** your MCP
+server — the piece most people miss:
+
+- **A reachable address must be in the server cert.** If your server was set up
+  loopback-only (the one-command installer uses `--hostname $(hostname)`), add an
+  address the endpoint can dial — the server's LAN IP, `<host>.local` on the same
+  LAN, or a Tailscale name. Existing agents aren't affected (they pin the CA):
+
+  ```bash
+  puck-mcp rotate-server-cert --add-san 192.168.1.10
+  ```
+
+  Restart Claude Code afterward so its `puck-mcp` serves the updated cert.
+- **The server has to be up, with the port open.** With `--service none` the server
+  runs only while Claude Code is open. Allow inbound TCP `50281` on the MCP host
+  (macOS prompts on first bind, or System Settings → Network → Firewall → Options →
+  allow `puck-mcp`).
+
+Then, three moves:
+
+**1. On the MCP host** — mint a token for the endpoint and print your CA fingerprint:
 
 ```bash
-puck-mcp generate-bootstrap-token --hostname eng-laptop-47 --ttl 1h  # explicit; default is now 4h
+puck-mcp generate-bootstrap-token --hostname vm-01 --server https://192.168.1.10:50281
+echo "sha256:$(openssl x509 -in ~/.config/puck-mcp/ca.pem -noout -fingerprint -sha256 | sed 's/.*=//;s/://g' | tr 'A-Z' 'a-z')"
 ```
 
-This prints a token like `puck-bt-…` — single-use, time-limited, hostname-bound. The token is itself a credential: anything that touches it (your shell, environment variable, here-string, ps output) is a potential leak surface. The patterns below avoid every trivial leak channel.
+`generate-bootstrap-token` also **prints a ready-to-paste install block** with
+`--server` and `--hostname` already filled in — pasting that whole block on the
+endpoint is the simplest, mismatch-proof path. The token-file steps below are the
+equivalent that keeps the token out of shell history. Either way, **use the token and
+`--hostname` from the *same* generate command** (`--hostname` is the agent's label,
+not the box's real hostname; the token is bound to it). Mixing a stale token from an
+earlier run with a fresh `--hostname` is the usual cause of `403 token hostname
+mismatch`.
 
-**Recommended: read the token directly into a temp file on the endpoint, never via argv.**
+**2. On the endpoint** — save the token (run this line by itself, paste the token,
+then press Ctrl-D — this keeps it out of your shell history):
 
 ```bash
-# On the ENDPOINT, after copying the token from the MCP host out-of-band:
-TOKEN_FILE=$(mktemp /tmp/puck-bt.XXXXXX) && chmod 600 "$TOKEN_FILE"
-printf 'Paste the puck-bt-… token (input hidden): '; read -rs TOKEN; echo
-printf '%s' "$TOKEN" > "$TOKEN_FILE"; unset TOKEN
-
-curl -fsSL https://github.com/puck-security/puck-scout/releases/latest/download/install-agent.sh | \
-  bash -s -- --server https://puck-mcp.internal:50281 \
-             --hostname eng-laptop-47 \
-             --token-file "$TOKEN_FILE"
-shred -u "$TOKEN_FILE" 2>/dev/null || rm -f "$TOKEN_FILE"
+umask 077; cat > /tmp/puck-bt
 ```
 
-**For automated enrollment (no human in the loop), pipe the token directly from the MCP host over SSH:**
+**3. On the endpoint** — download the installer and enroll, using your server's
+address and the fingerprint from move 1:
 
 ```bash
-puck-mcp generate-bootstrap-token --hostname eng-laptop-47 --ttl 1h | \
-  grep -oE 'puck-bt-[A-Za-z0-9_-]+' | \
-  ssh eng-laptop-47 'TF=$(mktemp /tmp/puck-bt.XXXXXX) && chmod 600 "$TF" && cat > "$TF" && \
-    curl -fsSL .../install-agent.sh | bash -s -- --token-file "$TF" \
-       --server https://puck-mcp.internal:50281 --hostname eng-laptop-47 && \
-    shred -u "$TF" 2>/dev/null || rm -f "$TF"'
-```
-
-> **Why not `--token-stdin <<< "puck-bt-…"`?** A here-string lands in shell history unless `HISTCONTROL=ignorespace` is set (not the default) and shows up in `ps`. It also can't work when the install script is piped via `curl | bash` — bash's stdin is the script body, so `read` gets nothing. Use `--token-file` (or download the script first, then stdin); `--token-stdin` is fine for lab/CI if you accept the history exposure.
-
-The script requires `puck-agent` to be on `PATH` on the endpoint (or set `PUCK_AGENT_BIN=/absolute/path/to/puck-agent`). Pass `--download-binary` to fetch the correct binary for the endpoint's architecture automatically from GitHub releases; if no pre-built release is available yet, the script prints build-from-source instructions instead.
-
-The script:
-- Verifies `puck-agent` is present on `PATH` (or `$PUCK_AGENT_BIN`)
-- Performs mTLS enrollment using the bootstrap token: generates a client cert + key, and **writes the server's CA cert returned by the enrollment response to disk** — you do not need to pre-distribute `ca.pem` to endpoints. The server's CA is trusted on first connect (or verified against the `--server-ca-fingerprint` you obtained out-of-band from `setup-mcp.sh`, which is what the auto-generated install block uses)
-- Writes a config to `~/.config/puck-agent/puck-agent.yaml` (mode 0600)
-- Installs and starts a system service: launchd (macOS), systemd (Linux), or Scheduled Task (Windows, runs at user logon)
-
-To install on your local machine for testing, note the two flags play different roles:
-
-- `--hostname $(hostname)` is the agent's **identity** — it becomes the client cert CN and the name the bootstrap token is bound to.
-- `--server` is **where the agent reaches the MCP server**. For a same-machine install that is loopback — `https://127.0.0.1:50281` — which `setup-mcp.sh` always includes in the server cert SANs and which needs no DNS.
-
-Do **not** use `https://$(hostname):50281` for `--server`: a bare hostname like `MacBook-Pro-1a2b3c` usually does not resolve on macOS (the mDNS form is `<host>.local`), so enrollment fails with a DNS lookup error.
-
-```bash
-# Generate a token bound to this hostname.  --ttl is optional; default is 4h.
-puck-mcp generate-bootstrap-token --hostname $(hostname) | \
-  grep puck-bt- > /tmp/bootstrap-token
-
-# Enroll — add --download-binary to fetch the agent binary automatically.
-# --server is loopback (same machine); --hostname is this agent's identity.
-bash scripts/install-agent.sh \
-  --server https://127.0.0.1:50281 \
-  --hostname $(hostname) \
-  --token-file /tmp/bootstrap-token \
+curl -fsSLO https://github.com/puck-security/puck-scout/releases/latest/download/install-agent.sh
+bash install-agent.sh \
+  --server https://192.168.1.10:50281 \
+  --hostname vm-01 \
+  --token-file /tmp/puck-bt \
+  --server-ca-fingerprint sha256:REPLACE_WITH_FINGERPRINT \
   --download-binary
-rm -f /tmp/bootstrap-token
+rm -f /tmp/puck-bt
 ```
 
-After enrollment, the install script registers a system service (launchd on
-macOS, systemd on Linux, Scheduled Task on Windows) so the agent restarts at
-logon and reboot.  You normally don't need to start it manually.  When you do
-(debug, manual install, foreground run):
+`install-agent.sh` fetches `puck-agent` (`--download-binary`), writes the client cert
++ server CA (no need to pre-distribute `ca.pem`) and `~/.config/puck-agent/puck-agent.yaml`,
+and installs a service so the agent restarts at boot. `--server-ca-fingerprint` pins
+the server during enrollment — skip it only on loopback.
+
+### On this same machine (loopback)
+
+If you skipped the one-command installer and want to enroll the workstation itself,
+open Claude Code first (so its `puck-mcp` is serving `:50281`), then enroll against
+loopback — no fingerprint needed, and `--download-binary` points the script at
+`puck-agent`:
 
 ```bash
-# macOS / Linux — default config at ~/.config/puck-agent/puck-agent.yaml
-puck-agent serve
-
-# Unix root install (system-service config lives under /etc/)
-puck-agent serve --config /etc/puck-agent/puck-agent.yaml
+curl -fsSLO https://github.com/puck-security/puck-scout/releases/latest/download/install-agent.sh
+puck-mcp generate-bootstrap-token --hostname "$(hostname)" > /tmp/puck-bt
+bash install-agent.sh \
+  --server https://127.0.0.1:50281 \
+  --hostname "$(hostname)" \
+  --token-file /tmp/puck-bt \
+  --download-binary
+rm -f /tmp/puck-bt
 ```
 
-```powershell
-# Windows — default config at %USERPROFILE%\.config\puck-agent\puck-agent.yaml
-puck-agent.exe serve
-```
+Use loopback, not `https://$(hostname):50281` — a bare Mac hostname usually doesn't
+resolve, and loopback is always in the cert SANs.
 
-`puck-agent serve` without `--config` searches the user-local install path
-first, then `/etc/puck-agent/puck-agent.yaml` on Unix.  Both `enroll` and
-`serve` use the same per-platform default install directory so you only have
-to pass `--config` when you've put the file somewhere non-standard.
+### Remove or re-point an agent
 
-#### Windows endpoint (PowerShell)
-
-There's no install script for Windows — instead, generate the token **with `--server`** on the MCP host and it prints a paste-ready PowerShell block (download + SHA256 verify, enroll via stdin, CA-pinned, registers a Scheduled Task). Typical cross-machine case: a macOS/Linux server with a Windows agent on the same LAN.
+Two commands cover the common changes. To stop a box being an agent — e.g. your MCP
+server box, which the one-command installer also enrolled — remove just the agent;
+the MCP server, Claude registration, and binaries stay:
 
 ```bash
-# On the MCP host — pass the address the Windows box will actually dial:
+curl -fsSLO https://github.com/puck-security/puck-scout/releases/latest/download/uninstall.sh
+bash uninstall.sh --agent-only
+```
+
+To move an agent to a **different** server: remove it first (above), then enroll it
+against the new server with a fresh token. `puck-agent enroll` won't overwrite a
+valid cert, so removing first is what makes the re-point take. On the new server:
+
+```bash
+puck-mcp generate-bootstrap-token --hostname vm-01 --server https://<new-server>:50281
+```
+
+Then run the [enroll steps](#on-a-different-machine-a-vm-or-second-host) on the box.
+
+### Windows endpoints
+
+There's no shell script — generate the token **with `--server`** and `puck-mcp`
+prints a paste-ready PowerShell block (download + SHA256 verify, CA-pinned enroll,
+registers a Scheduled Task):
+
+```bash
 puck-mcp generate-bootstrap-token --hostname win-box-01 --server https://192.168.1.10:50281
 ```
 
-Paste the emitted **Windows** block into PowerShell on the endpoint. Three things to get right for cross-machine enrollment:
+The cert SAN must cover that address (Step 1) or `serve` fails TLS even though
+enroll succeeds; the Scheduled Task runs at user logon (register a system-level task
+for always-on hosts).
 
-- **The cert SAN must cover that address.** The agent verifies the server cert at `serve` time, so set the server up with `setup-mcp.sh --hostname <server-LAN-IP>` (or `--server-cert-sans <ip>,…`) — otherwise enroll succeeds (TOFU) but `serve` fails TLS. See Step 1's deployment-pattern options for mesh / DDNS / mDNS alternatives.
-- **Open the server firewall** for inbound TCP `50281` (the agent listener binds `0.0.0.0`; macOS prompts on first bind).
-- **The Scheduled Task runs at user logon**, so the agent is active only while that user is signed in. For an always-on Windows host, register it as a system-level task instead.
+### Run the agent by hand
 
-### Step 4: Run your first investigation
+The service runs the agent for you. To start it manually (debugging or a manual
+install) — the first line uses the default config path, the second an explicit one:
 
-Open Claude Code and ask puck directly — name the tool to make sure it routes to puck rather than a local skill:
+```bash
+puck-agent serve
+puck-agent serve --config /etc/puck-agent/puck-agent.yaml
+```
+
+## Step 4: Investigate and review
+
+Open Claude Code and ask puck directly — name the tool so it routes to puck:
 
 ```
 Use puck_investigate to check our fleet for offensive security tools like nuclei, ffuf, masscan, nmap, and metasploit.
 ```
 
-Or reference a skill:
+Or reference a skill, or describe the situation and let Claude pick one. Type
+`/mcp` to see the live tool list. Artifacts land in
+`~/.config/puck-mcp/investigations/<id>/`:
 
 ```
-Use puck_investigate — CVE-2026-1234 in libxyz is actively exploited. Check our fleet with the blast-radius skill.
+<id>/
+  metadata.json   # query, skill, cost caps
+  audit.jsonl     # every command executed, with timestamps
+  pathfinder/     # initial single-host results
+  fleet/          # fleet-wide results (one JSON per host)
+  followup/       # follow-up checks on affected hosts
+  analysis.md     # the final report
 ```
 
-Not sure what tools are available? Type `/mcp` in Claude Code to see all puck tools and their descriptions.
+### Available skills
 
-### Step 5: Review the results
+| Skill | Category | Description |
+|-------|----------|-------------|
+| `blast-radius` | ir-triage | Scope lateral movement / blast radius from a compromised host (package / CVE focus) |
+| `ir-triage` | ir-triage | Initial incident-response triage for a suspicious endpoint |
+| `cve-exposure` | compliance | Check endpoint exposure to specific CVEs |
+| `shadow-ai` | inventory | Discover unauthorized AI tools and services on endpoints |
+| `credential-exposure` | hunt | Discover credentials on developer endpoints (dotfiles, browsers, Electron apps, AI/MCP tokens, cloud SSO, Windows DPAPI); emits handoffs to blast-radius skills |
+| `aws-blast-radius` | ir-triage | Characterize AWS principals from discovered AccessKeyIds — a natural next pass after `credential-exposure` |
 
-Investigation artifacts are saved to `~/.config/puck-mcp/investigations/<investigation-id>/`:
-
-```
-<uuid>/
-  metadata.json       # Query, skill, cost caps
-  audit.jsonl         # Every command executed, with timestamps
-  pathfinder/         # Initial single-host results
-  fleet/              # Fleet-wide results (one JSON per host)
-  followup/           # Follow-up checks on affected hosts
-  analysis.md         # The final report
-```
+Call `puck_list_skills` for the live catalog (each skill's version, status, and
+required allowlist entries).
 
 ---
 
-## Multiple hosts (fleet enrollment)
+## Fleet enrollment
 
-For more than one host, `generate-bootstrap-token` accepts a comma-separated
-list of hostnames via `--hostnames` and emits one install block per host,
-delimited by `=== <hostname> ===` headers:
+`generate-bootstrap-token` takes `--hostnames a,b,c` and emits one install block
+per host, delimited by `=== <hostname> ===` headers for mechanical splitting:
 
 ```bash
 puck-mcp generate-bootstrap-token \
@@ -292,500 +346,236 @@ puck-mcp generate-bootstrap-token \
     --server https://puck-mcp.internal:50281
 ```
 
-Output is shaped to be split mechanically (each host block is self-contained
-between `=== … ===` headers).  Per-host token, per-host CA-pinned install
-one-liner.
-
-**SSH fan-out (10–100 hosts):**
+**SSH fan-out (10–100 hosts).** The `FP` line computes the CA fingerprint from
+`ca.pem` (the value `setup-mcp.sh` also prints) so each enroll is MITM-pinned:
 
 ```bash
-HOSTS=(eng-build-03 eng-build-07 db-replica-01 ...)
+HOSTS=(eng-build-03 eng-build-07 db-replica-01)
 MCP=https://puck-mcp.internal:50281
-FP=$(puck-mcp doctor 2>&1 | awk -F'sha256:' '/sha256:/ {print "sha256:"$2; exit}')
+FP="sha256:$(openssl x509 -in ~/.config/puck-mcp/ca.pem -noout -fingerprint -sha256 | sed 's/.*=//;s/://g' | tr 'A-Z' 'a-z')"
+SCRIPT=https://github.com/puck-security/puck-scout/releases/latest/download/install-agent.sh
 
 for h in "${HOSTS[@]}"; do
     TOKEN=$(puck-mcp generate-bootstrap-token --hostname "$h")
     ssh "user@$h" \
       "PUCK_BOOTSTRAP_TOKEN='$TOKEN' bash -s -- \
        --server $MCP --hostname '$h' --server-ca-fingerprint $FP --download-binary" \
-      < <(curl -fsSL https://raw.githubusercontent.com/puck-security/puck-scout/main/scripts/install-agent.sh) &
+      < <(curl -fsSL "$SCRIPT") &
 done
 wait
 ```
 
-Parallelise more aggressively with `xargs -P 32` if you've got many hosts.
-Each enrollment takes ~2 seconds against a LAN-local MCP server; the token
-ledger is serialised so you'll see linear scaling, not concurrent speedup
-for the issue side.
-
-**Config-management hooks (Ansible / Salt / Chef):**
-
-`install-agent.sh` is fully non-interactive — pass `--token-file` (not
-`--token-stdin`, since automation rarely has a clean stdin) and the script
-returns exit code 0 on success or non-zero with stderr explaining the
-failure. Wrap it in your favourite runbook step.  See the operator-level
-flow in [operations.md → CA rotation](operations.md#ca-rotation) for a
-worked example.
-
-**Windows in a fleet:**
-
-The PowerShell install block is intended for one-off hand installs.  For
-fleet-scale Windows, push the block via:
-
-- MDM / Intune (Win32 app or PowerShell script policy)
-- SCCM "Run script"
-- Group Policy startup script (with the right user context for the
-  Scheduled Task to register against)
-
-The block self-contains everything (download, SHA256 verify, enroll,
-register Scheduled Task) so it's a single chunk to push.  Generate the
-PowerShell text once with `--hostnames` for every Windows host, then send
-each block to its target endpoint via whichever channel your fleet uses.
-
----
-
-## Available Skills
-
-| Skill | Category | Description |
-|-------|----------|-------------|
-| `blast-radius` | ir-triage | Scope lateral movement and determine blast radius from a compromised host (package / CVE focus) |
-| `ir-triage` | ir-triage | Initial incident response triage for a suspicious endpoint |
-| `cve-exposure` | compliance | Check endpoint exposure to specific CVEs |
-| `shadow-ai` | inventory | Discover unauthorized AI tools and services on endpoints |
-| `credential-exposure` | hunt | Discover credentials on developer endpoints — dotfiles, browsers, Electron apps, AI/MCP tokens, password managers, cloud SSO, Windows DPAPI; cross-platform; emits structured handoffs to per-platform blast-radius skills |
-| `aws-blast-radius` | ir-triage | Characterize AWS principals from discovered AccessKeyIds: account, IAM user/role, attached policies, session validity window, dangerous-action simulation, recent CloudTrail. Natural next pass after `credential-exposure` |
-
-Mention a skill by name in your question, or let Claude choose the best fit. Call `puck_list_skills` from inside Claude Code to see the live catalog (including each skill's status, version, and required allowlist entries).
-
----
+`install-agent.sh` is fully non-interactive (use `--token-file` for automation,
+not `--token-stdin`), so it drops into Ansible / Salt / Chef steps. For Windows at
+fleet scale, push the PowerShell block (self-contained: download, verify, enroll,
+Scheduled Task) via Intune / SCCM / GPO.
 
 ## Configuration
 
-The MCP server config is at `~/.config/puck-mcp/puck-mcp.yaml`.  `setup-mcp.sh`
-writes a ready-to-use file with sane defaults; you normally don't need to edit
-it.  For every supported field (listeners, PKI paths, cost caps, policy
-overrides), see [Reference → `puck-mcp.yaml`](reference.md#puck-mcpyaml).
+Both configs are written for you and rarely need editing:
 
-The agent config is at `~/.config/puck-agent/puck-agent.yaml` (or
-`/etc/puck-agent/puck-agent.yaml` for a root install) and is written by
-`puck-agent enroll` — you also don't need to hand-edit it.
+- `~/.config/puck-mcp/puck-mcp.yaml` — written by `setup-mcp.sh`.
+- `~/.config/puck-agent/puck-agent.yaml` (or `/etc/puck-agent/…` for root) —
+  written by `puck-agent enroll`.
 
----
+Every field (listeners, PKI paths, cost caps, policy overrides) is in
+[reference.md → `puck-mcp.yaml`](reference.md#puck-mcpyaml).
 
-## Upgrading Puck
+## Upgrading
 
-`puck-agent` and `puck-mcp` are **versioned together** — the CSR key algorithm, policy grammar, and wire types change across versions with no protocol negotiation. Always run matching versions from the same [GitHub release](https://github.com/puck-security/puck-scout/releases/latest); the common break is pairing a release server with a locally-built agent (or vice versa). On a version-skew rejection, see [enrollment `400 … csr key algorithm`](#troubleshooting).
+`puck-agent` and `puck-mcp` are **versioned together** — always run matching
+versions from the same [release](https://github.com/puck-security/puck-scout/releases/latest).
+Mixing a release-vintage server with a locally-built agent is the usual cause of a
+`400 … csr key algorithm` rejection.
 
-The good news: an in-place upgrade is just **swap the binary and restart**. Enrollment material (the agent's `cert.pem` / `cert-key.pem` / `ca.pem` and the server's CA) lives on disk and survives, so upgrades never require re-enrolling agents.
-
-### Upgrade the MCP server (operator host)
+An in-place upgrade is **swap the binary and restart** — enrollment material
+survives on disk, so upgrades never re-enroll agents. Verify against the release
+checksums, then install over the old binary (use `puck-agent` to upgrade the agent):
 
 ```bash
-# 1. Download the new release binary for your platform + the checksums.
-#    (See Step 0 for the platform → asset-name table.)
-curl -fsSLO https://github.com/puck-security/puck-scout/releases/latest/download/puck-mcp-<os>-<arch>
 curl -fsSLO https://github.com/puck-security/puck-scout/releases/latest/download/SHA256SUMS
-shasum -a 256 --ignore-missing -c SHA256SUMS      # must print "puck-mcp-<os>-<arch>: OK"
-
-# 2. macOS only: strip quarantine/provenance so ASP doesn't block the new inode.
-xattr -d com.apple.quarantine puck-mcp-darwin-* 2>/dev/null
-xattr -d com.apple.provenance puck-mcp-darwin-* 2>/dev/null
-
-# 3. Install over the old binary with install(1), NOT cp (see Step 0 for why).
+shasum -a 256 --ignore-missing -c SHA256SUMS
 install -m 0755 puck-mcp-<os>-<arch> "$(command -v puck-mcp)"
-
-# 4. Restart so the new binary is running:
-#    - stdio mode (Claude Code spawns puck-mcp): just restart Claude Code.
-#    - standalone/daemon: restart the service (or stop + re-run).
 ```
 
-On restart, `puck-mcp` **reuses the CA and server cert already on disk** (regenerating a CA only if both are missing), so enrolled agents keep trusting the upgraded server with no endpoint action. Confirm with `puck-mcp status` (version, listeners, cert SANs, enrolled agents).
+Then restart so the new binary runs: in stdio mode restart Claude Code; as a
+service, restart the service.
 
-> If you ran a standalone `puck-mcp` only to mint bootstrap tokens during enrollment, stop it once the fleet is enrolled — leaving it bound to port 50281 prevents Claude Code's stdio `puck-mcp` from binding. See the Troubleshooting entry on zero `connected_agents`.
-
-### Upgrade an agent (endpoint)
-
-Re-run the same install path you used to enroll — it is idempotent:
-
-```bash
-# Drop in the new release binary (verify against SHA256SUMS as above), then:
-install -m 0755 puck-agent-<os>-<arch> "$(command -v puck-agent)"
-sudo systemctl restart puck-agent          # Linux service
-# macOS:  launchctl kickstart -k gui/$(id -u)/io.puck.agent   (system/io.puck.agent for a root install)
-```
-
-`puck-agent enroll` is a no-op when a valid cert exists, so re-running `install-agent.sh` just lands the new binary — the restart above is what applies the upgrade. For fleets, drive it with the mechanism from [Multiple hosts](#multiple-hosts-fleet-enrollment) (Ansible, an SSH loop, MDM).
-
-### Verify the upgrade
-
-The checksum is the authoritative check; the version string is convenience:
-
-```bash
-shasum -a 256 "$(command -v puck-agent)"   # compare against SHA256SUMS for the target release
-puck-agent --version                       # quick check — prints the version (+ build commit)
-```
-
-Fleet-wide, `puck_investigate` reports each host's running build under `agent_versions`, so you can spot a straggler without touching every endpoint.
-
-### Does an upgrade need re-enrollment?
-
-A version upgrade never does. Re-enrollment is forced only by changes to the **CA** (which agents pin) — not by new binaries, and not by server-cert or SAN changes:
-
-| Operation | CA preserved? | Re-enroll agents? |
-|---|---|---|
-| Agent binary upgrade | yes | **No** — swap binary + restart |
-| MCP server binary upgrade | yes | **No** — CA + server cert reused on restart |
-| Server cert renewal (`puck-mcp rotate-server-cert`) | yes | **No** — agents pin the CA, not the leaf |
-| Server IP / hostname change (add a SAN) | yes | **No** — [operations.md → reachability changes](operations.md#server-reachability-changes-ip-or-hostname-change) |
-| Agent cert near expiry | yes | **No** — `enroll` re-issues against the same CA automatically |
-| **CA rotation** | **no — new CA** | **Yes, every endpoint** — [operations.md → CA rotation](operations.md#ca-rotation) |
-| **Lost `ca.pem` or `ca-key.pem`** | **no** | **Yes, every endpoint** — [operations.md → PKI Recovery](operations.md#pki-recovery) |
-
-### Rollback
-
-Rollback is the same procedure aimed at an older release: install the previous release's **agent and server** binaries (keep them matched to the same version) and restart. Because enrollment material is untouched, agents reconnect to the rolled-back server without re-enrolling — as long as you move both sides together.
-
----
+`puck-mcp status` shows the running version, listeners, cert SANs, and enrolled
+agents. **Re-enrollment is forced only by a CA change** — not by new binaries, cert
+renewal, or SAN additions. CA rotation and PKI recovery live in
+[operations.md](operations.md).
 
 ## Diagnostics
 
-When anything seems off, two commands cover everything:
+Two commands cover almost everything:
 
-- **`puck-mcp status`** — first stop.  Names the config file being read,
-  whether the server's running, whether each listener is actually bound, the
-  server cert SANs (what hostname agents must reach), and the enrolled-agent
-  list.  Catches the common "I edited my config but the running puck-mcp is
-  reading a different one" trap.
-- **`puck-mcp doctor`** — deeper self-test of ports, PKI, the fcntl lock, and
-  the bootstrap-token ledger.  Exits non-zero on any failure.
+- **`puck-mcp status`** — first stop: which config is being read, whether each
+  listener is bound, the server cert SANs, enrolled agents, and pending tokens.
+- **`puck-mcp doctor`** — deeper self-test of ports, PKI, the instance lock, and
+  the token ledger; exits non-zero on any failure.
 
-Field-level docs for both (output format, exit codes, every check performed)
-are in [Reference → CLI subcommands](reference.md#cli-subcommands).
-
----
+Field-level docs: [reference.md → CLI subcommands](reference.md#cli-subcommands).
 
 ## Troubleshooting
 
-**puck-mcp or puck-agent hangs immediately (macOS Sequoia)**
+Run **`puck-mcp doctor`** first for server-side issues — it catches most of the
+below. There's no `puck-agent doctor` yet, so for agent-side problems the agent's log
+(or a foreground `puck-agent serve`) is your diagnostic — see "empty fleet" below.
 
-Symptom: `puck-mcp help` (or any subcommand) never returns; `ps` shows the
-process in state `UE`; Console.app shows `ASP: Security policy would not
-allow process: NNN, /path/to/puck-mcp`.
+**An investigation reports an empty fleet (`agent_count: 0`) after you enrolled an
+agent.** Enrolling only issues a cert — the agent still has to be **running** and
+connected, and as a background service its errors aren't on screen. Surface them:
 
-Cause: macOS Sequoia's Apple Security Policy blocks unsigned binaries that
-inherited a "provenance" attribute from `cp` (or finder copy).  The attribute
-is applied automatically when copying from a build directory; once it's on,
-ASP holds the process in kernel space at first syscall.
+- **macOS (launchd):** `tail -f ~/Library/Logs/puck-agent.log`
+- **Linux (systemd):** `journalctl -u puck-agent -f`
+- **Anywhere:** stop the service and run `puck-agent serve --config <path>` in the
+  foreground to watch it connect live.
 
-Fix: reinstall the binary with `install(1)` instead of `cp` — it creates a
-fresh inode that ASP treats normally.
+The log usually names the cause: the service never started (macOS SSH-only box with
+no GUI session — re-run under `sudo`), the MCP server isn't up (it only runs while
+Claude Code is open), or a cert-SAN mismatch (`certificate not valid for name …`,
+below).
 
-```bash
-install -m 0755 mcp/puck-mcp                  ~/.local/bin/puck-mcp
-install -m 0755 agent/target/release/puck-agent ~/.local/bin/puck-agent
-```
+**A binary hangs immediately on macOS (state `UE`, `ASP: Security policy would not
+allow process`).** Sequoia's Apple Security Policy blocked a binary carrying a
+provenance/quarantine attribute. Reinstall with `install` (not `cp` — it makes a
+fresh inode), and for browser-downloaded binaries strip the attrs first — see the
+[Step 0 macOS note](#from-releases-manual).
 
-If you downloaded a release binary instead of building from source, the
-provenance attribute comes from Gatekeeper.  Strip both attributes, then move
-the binary into place with `install(1)`:
-
-```bash
-xattr -d com.apple.quarantine  puck-mcp-darwin-arm64 2>/dev/null
-xattr -d com.apple.provenance  puck-mcp-darwin-arm64 2>/dev/null
-install -m 0755 puck-mcp-darwin-arm64 ~/.local/bin/puck-mcp
-```
-
-**Agents not connecting**
-
-Run `puck-mcp doctor` first — it will report whether the agent listener is bound, whether the CA and server cert are valid, and whether any other instance is running. Then verify the mTLS handshake manually:
+**Agents not connecting.** Confirm the mTLS listener and chain:
 
 ```bash
-curl --cacert /etc/puck-mcp/ca.pem \
-     --cert   /etc/puck-agent/cert.pem \
-     --key    /etc/puck-agent/cert-key.pem \
-     https://<operator-host>:50281/v1/health
+curl --cacert ~/.config/puck-agent/ca.pem \
+     --cert   ~/.config/puck-agent/cert.pem \
+     --key    ~/.config/puck-agent/cert-key.pem \
+     https://<mcp-host>:50281/v1/health
 ```
 
-A `200 OK` with `{"status":"ok"}` means the mTLS listener is up and the certificate chain is trusted. If the handshake fails, check that `ca.pem` on the agent matches the CA that signed the server cert.
+A `200` with `{"status":"ok"}` means the listener and cert chain are good. If it
+fails: check the agent's `ca.pem` matches the CA that signed the server cert,
+that the server cert SAN covers the address you're dialing, and — for remote hosts
+— that inbound TCP `50281` is open (macOS: System Settings → Network → Firewall →
+Options → allow `puck-mcp`). `Test-NetConnection <host> -Port 50281` distinguishes
+firewall-blocked (timeout) from no-listener (refused).
 
-**On macOS, check the firewall.** On first inbound bind the kernel firewall prompts to allow connections; if it was dismissed, `puck-mcp doctor` still shows the listener bound but off-host connections silently time out. Under **System Settings → Network → Firewall → Options**, set `puck-mcp` to "Allow incoming connections." `Test-NetConnection <host> -Port 50281` from the agent endpoint distinguishes firewall-blocked (timeout) from no-listener (refused).
+**Agent enrolls fine but `serve` logs `invalid peer certificate: certificate not
+valid for name <addr>`** (and the fleet stays empty). Enrollment pins the CA
+fingerprint, but `serve` does full TLS hostname verification — so the address the
+agent dials must be one of the server cert's SANs (the log lists what the cert
+covers). Add the dialed address on the MCP host — for a local VM that's often the
+vmnet gateway `192.168.64.1`, not the Mac's own LAN IP — then restart Claude Code so
+it serves the new cert. No re-enrollment (agents pin the CA, not the leaf):
 
-**Enrollment fails with `400 Bad Request body=csr invalid: csr key algorithm must be …`**
-
-Symptom: `puck-agent enroll` returns a 400 from the server saying the CSR's key algorithm is wrong (e.g. "must be ed25519" or "must be ECDSA P-256"). The agent and server clearly handshake at the TLS layer — the rejection is at the application layer.
-
-Cause: `puck-agent` and `puck-mcp` are versioned together. The CSR key algorithm, the policy grammar, and several wire types have all changed across versions. A stale `puck-mcp` (or stale `puck-agent`) paired with the other side from a newer commit will be rejected with errors like this one. The release binaries on a given GitHub release are guaranteed to match; mixing a release-vintage server with a locally-built agent (or vice versa) is the common way to hit this.
-
-Fix: rebuild whichever side is older so both come from the same commit, reinstall with `install(1)`, and re-run `setup-mcp.sh` if the protocol break also affected the CA or server cert shape (the CSR-algo migration did). Then re-issue the bootstrap token — old tokens are bound to the previous CA's state and will not redeem against the new ledger.
-
-**Agent registers, but Claude Code sees zero `connected_agents`**
-
-Run `puck-mcp doctor` first — it will report whether more than one `puck-mcp` instance is detected (the `fcntl lock` check).
-
-Symptom: `puck-agent` logs show successful registration with the MCP server, but `puck_list_agents` from Claude Code returns an empty fleet.
-
-Cause: two `puck-mcp` processes with independent in-memory registries — the agent registered with whichever bound port 50281 first (often a long-running `make run`), while Claude Code's stdio `puck-mcp` (spawned via `.mcp.json`) couldn't bind 50281, so its registry stayed empty.
-
-Current `puck-mcp` refuses to start in this state (the second process exits with a "cannot bind" error), so the silent symptom means you're on an older build. See [architecture.md → Per-process state](architecture.md#per-process-state--only-one-puck-mcp-should-run-at-a-time).
-
-Diagnosis:
 ```bash
-ps aux | grep -E '[p]uck-mcp'          # expect ONE row, not two
-lsof -nP -iTCP:50281 -sTCP:LISTEN     # which PID owns the agent mTLS port
+puck-mcp rotate-server-cert --add-san 192.168.64.1
 ```
 
-Fix: kill the extra `puck-mcp` and let Claude Code's stdio MCP own port 50281.
-```bash
-kill <PID-of-the-extra-puck-mcp>      # usually the make-run HTTP instance
-# Restart Claude Code so it respawns its stdio puck-mcp; the stdio process
-# will now bind 50281 itself and become the single source of truth.
-```
+**Enroll fails with `403 … token hostname mismatch`.** The token is bound to the
+`--hostname` you generated it with (compared case-insensitively, so casing isn't the
+issue). This means the token you enrolled with was minted for a *different* hostname
+than the `--hostname` you passed — almost always a stale token from an earlier
+`generate-bootstrap-token` run, pasted alongside a fresh `--hostname`. Generate one
+fresh token and use that command's output end-to-end (its printed install block
+already carries the matching `--hostname`); tokens are single-use, so a spent one
+gives `401 … already spent` instead.
 
-Keep `.mcp.json` on stdio transport. The HTTP+SSE transport (`"url": "http://..."`) is not currently a working connection path for Claude Code — JSON-RPC responses route through the POST channel rather than the SSE stream the client expects. Stdio is the only working MCP-client transport today.
+**Enroll fails with `400 … csr key algorithm must be …`.** Version skew — the agent
+and server came from different commits. Rebuild/redownload both from the same
+release, reinstall with `install`, re-run `setup-mcp.sh` if the CA shape changed,
+and re-issue the token (old tokens are bound to the previous CA state).
 
-**MCP server not responding in Claude Code**
+**Agent registers but Claude Code sees zero agents / "can't connect after
+setup-mcp.sh".** Two `puck-mcp` processes fighting over `:50281`: a service (or a
+stray `puck-mcp`) won the port, so Claude Code's stdio server couldn't bind and its
+registry is empty. Run one OR the other, not both — use `--service none` on a host
+that also runs Claude Code. Current builds refuse to start the second instance;
+`lsof -nP -iTCP:50281 -sTCP:LISTEN` shows who owns the port.
 
-Run `puck-mcp doctor` first — it will report port availability and PKI health.  Then check the stdio log for errors:
-- Linux: `~/.cache/puck-mcp/stdio.log` (or `$XDG_CACHE_HOME/puck-mcp/stdio.log`)
-- macOS: `~/Library/Caches/puck-mcp/stdio.log`
-- Windows: `%LocalAppData%\puck-mcp\stdio.log`
+**MCP server not responding in Claude Code.** Check the stdio log — macOS
+`~/Library/Caches/puck-mcp/stdio.log`, Linux `~/.cache/puck-mcp/stdio.log`, Windows
+`%LocalAppData%\puck-mcp\stdio.log` — and confirm the `.mcp.json` paths are absolute
+and the binary runs: `puck-mcp --config ~/.config/puck-mcp/puck-mcp.yaml`.
 
-Verify the paths in `.mcp.json` are absolute and the binary is executable:
-```bash
-ls -la ~/.local/bin/puck-mcp
-~/.local/bin/puck-mcp --config ~/.config/puck-mcp/puck-mcp.yaml
-```
-
-**Commands rejected by the policy engine**
-
-Run `puck-mcp doctor` first — it will confirm the policy engine mode and flag any config issues. Then check the audit log at `~/.config/puck-mcp/audit.jsonl` which records rejected commands and the reason. The rejection message names the requesting skill and the binary that was not found in `policy/policy.toml`. To add a new binary, open a PR to `policy/policy.toml` with the typed grammar and corpus vectors — the CI parity gate verifies that Rust and Go agree. To temporarily enable or disable a compiled-in entry on a specific host without a rebuild, add it to `/etc/puck/policy-overrides.toml`; that file can enable/disable existing entries but cannot define new grammar.
-
-**A skill reports `status: degraded` in `puck_list_skills`**
-
-Run `puck-mcp doctor` first — it will surface degraded skills and their missing policy entries. Skills declare the policy-engine entries they need via `required_commands`. When the compiled-in `policy.toml` doesn't cover everything a skill declares, that skill is loaded but marked `status: degraded` with a `missing_commands` array listing the exact entries to add. The startup log also emits a warning per degraded skill.
-
-Fix: open a PR adding each missing binary to `policy/policy.toml` with its canonical paths, typed flag grammar, and at least one accept and one reject corpus vector. After the next release build, `puck_list_skills` should show the skill as `status: ok`.
-
-**Agent reports "binary not found" for a tool you know is installed**
-
-Run `puck-mcp doctor` first — it will report `no_executable_for_binary` errors when none of the binary's `canonical_paths` exist on the host. The agent does not search arbitrary directories: it spawns the first existing entry from the binary's `canonical_paths` list in `policy/policy.toml`. If your binary lives in a non-standard location (a corporate `/opt/<vendor>/bin`, an `asdf` shim), the right fix is a `policy_overrides_path` TOML file that re-paths that one binary, e.g.:
+**Commands rejected by the policy engine / a skill is `degraded` / "binary not
+found".** The typed allowlist (`policy/policy.toml`, compiled into both binaries) is
+a trust boundary, not runtime config. `puck_list_skills` names the missing entries;
+`~/.config/puck-mcp/audit.jsonl` records rejections. Add a new binary via a PR to
+`policy/policy.toml` (CI enforces Rust/Go parity). To enable/disable or re-path an
+**existing** entry on one host without a rebuild, use a
+`policy_overrides_path` TOML file:
 
 ```toml
-# /etc/puck/policy-overrides.toml on the affected host
+# /etc/puck/policy-overrides.toml
 [paths.aws]
 candidates = ["/opt/acme/aws-cli/v2/aws"]
 ```
 
-Then set `policy_overrides_path: /etc/puck/policy-overrides.toml` in `puck-agent.yaml` and restart the agent.
-
-**Commands rejected by the agent policy engine**
-
-The agent enforces the typed allowlist defined in `policy/policy.toml`, which is embedded into the binary at compile time. Anything not in `policy.toml` is rejected. The override file at `/etc/puck/policy-overrides.toml` can enable or disable compiled-in entries on a specific host; it cannot author new grammar. To add a new binary, open a PR to `policy/policy.toml` — this is a trust boundary, not a runtime configuration option.
-
-If `puck-mcp doctor` reports a `policy_drift` row for the agent (the agent's `policy_digest` differs from the server's), the agent is on an older `policy.toml` than the server expects. Rebuild and redeploy `puck-agent` to bring its embedded grammar back in sync.
-
-**I installed puck-mcp via setup-mcp.sh and Claude Code can't connect.**
-
-If `puck-mcp` is running as a system service AND Claude Code is configured to fork it via stdio on the same host, both processes will try to bind port 50281 and the second one will exit with "address already in use". Run either as a service OR via Claude Code, not both. Use `--service=none` when running `setup-mcp.sh` on a host that also runs Claude Code. See also [docs/operations.md](operations.md) for the policy engine migration procedure.
-
 ---
 
-## Building from Source
+## Build from Source
 
 ### Prerequisites
 
 | Dependency | Version | Install |
 |------------|---------|---------|
 | Rust | stable | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` |
-| Go | 1.22+ | https://go.dev/dl/ |
+| Go | 1.25+ | https://go.dev/dl/ (must satisfy `mcp/go.mod`) |
 
-### Build for your current platform
+### Build for your platform
 
 ```bash
 git clone https://github.com/puck-security/puck-scout.git
 cd puck-scout
 
-# Endpoint agent (Rust)
 cd agent && cargo build --release && cd ..
-# → agent/target/release/puck-agent  (agent/target/release/puck-agent.exe on Windows)
-
-# MCP server (Go)
-cd mcp && go build -o puck-mcp ./cmd/puck-mcp/ && cd ..
-# → mcp/puck-mcp  (mcp/puck-mcp.exe on Windows)
-
-# Install with install(1), not cp.  macOS Sequoia tags cp'd binaries with a
-# provenance attribute that Apple Security Policy can block (the running
-# binary hangs in kernel space at first syscall); install(1) creates a fresh
-# inode the security subsystem treats normally.
-install -m 0755 mcp/puck-mcp                  ~/.local/bin/puck-mcp
-install -m 0755 agent/target/release/puck-agent ~/.local/bin/puck-agent
+cd mcp   && go build -o puck-mcp ./cmd/puck-mcp/ && cd ..
+mkdir -p ~/.local/bin
+install -m 0755 mcp/puck-mcp                     ~/.local/bin/puck-mcp
+install -m 0755 agent/target/release/puck-agent  ~/.local/bin/puck-agent
 ```
 
-### Cross-compile for other platforms
+Builds land at `agent/target/release/puck-agent` and `mcp/puck-mcp`; use `install`
+(not `cp`) to avoid the macOS provenance issue from the Step 0 note.
 
-**MCP server** cross-compiles anywhere — Go handles it natively:
+Then continue at [Step 1](#step-1-set-up-the-mcp-server). For Claude Code with a
+source build, point `.mcp.json` at `mcp/puck-mcp` and `mcp/puck-mcp.yaml` (add
+`"cwd": "/abs/path/to/puck-scout/mcp"`).
 
-```bash
-cd mcp
+### Fastest local test
 
-# Linux
-GOOS=linux  GOARCH=amd64 go build -o puck-mcp-linux-amd64  ./cmd/puck-mcp/
-GOOS=linux  GOARCH=arm64 go build -o puck-mcp-linux-arm64  ./cmd/puck-mcp/
-
-# macOS
-GOOS=darwin GOARCH=amd64 go build -o puck-mcp-darwin-amd64 ./cmd/puck-mcp/
-GOOS=darwin GOARCH=arm64 go build -o puck-mcp-darwin-arm64 ./cmd/puck-mcp/
-
-# Windows
-GOOS=windows GOARCH=amd64 go build -o puck-mcp-windows-amd64.exe ./cmd/puck-mcp/
-GOOS=windows GOARCH=arm64 go build -o puck-mcp-windows-arm64.exe ./cmd/puck-mcp/
-```
-
-**Agent** can be cross-compiled with [`cross`](https://github.com/cross-rs/cross) (Docker required) or with `rustup` + a host cross-linker.
-
-> **Heads up — `cross` currently fails for the agent.** It mounts only the crate directory (`agent/`) into its build container, but the agent's `include_str!("../../../../policy/policy.toml")` walks one level above the crate to read the embedded policy grammar at the repo root. Builds error out with `couldn't read 'src/safety/policy/../../../../policy/policy.toml': No such file or directory`. Until this is fixed (either by adding a `Cross.toml` mount or a top-level `Cargo.toml` workspace), use the native-toolchain instructions below for all targets — they Just Work.
-
-```bash
-cargo install cross
-cd agent
-
-cross build --release --target x86_64-unknown-linux-gnu   # Linux amd64 — currently broken, see above
-cross build --release --target aarch64-unknown-linux-gnu  # Linux arm64 — currently broken, see above
-cross build --release --target x86_64-pc-windows-gnu      # Windows amd64 — currently broken, see above
-# Windows arm64: cross does not provide a Docker image for gnullvm; use llvm-mingw below
-```
-
-Without `cross`, use `rustup` and a system cross-linker (run all `cargo` commands from the `agent/` directory):
-
-```bash
-cd agent
-
-# Linux arm64 — from any Linux x86_64 host
-sudo apt-get install gcc-aarch64-linux-gnu
-rustup target add aarch64-unknown-linux-gnu
-CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
-  cargo build --release --target aarch64-unknown-linux-gnu
-
-# Windows amd64 — from Linux or macOS
-sudo apt-get install gcc-mingw-w64-x86-64  # Linux
-# brew install mingw-w64                   # macOS
-rustup target add x86_64-pc-windows-gnu
-cargo build --release --target x86_64-pc-windows-gnu
-
-# macOS both architectures — on any Apple Silicon Mac
-rustup target add x86_64-apple-darwin aarch64-apple-darwin
-cargo build --release --target x86_64-apple-darwin
-cargo build --release --target aarch64-apple-darwin
-```
-
-**Windows ARM64 cross-compilation from macOS** requires [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) (a Clang/LLVM toolchain for MinGW targets):
-
-```bash
-# Download the macOS universal tarball from the llvm-mingw releases page:
-#   https://github.com/mstorsjo/llvm-mingw/releases
-# e.g. llvm-mingw-*-ucrt-macos-universal.tar.xz
-tar -xJf llvm-mingw-*-ucrt-macos-universal.tar.xz -C /tmp
-export LLVM_MINGW=/tmp/llvm-mingw-<version>-ucrt-macos-universal
-export PATH="$LLVM_MINGW/bin:$PATH"
-
-cd agent
-rustup target add aarch64-pc-windows-gnullvm
-CC_aarch64_pc_windows_gnullvm=aarch64-w64-mingw32-clang \
-  CARGO_TARGET_AARCH64_PC_WINDOWS_GNULLVM_LINKER=aarch64-w64-mingw32-clang \
-  RUSTFLAGS="-L $LLVM_MINGW/aarch64-w64-mingw32/lib" \
-  cargo build --release --target aarch64-pc-windows-gnullvm
-# result: target/aarch64-pc-windows-gnullvm/release/puck-agent.exe
-```
-
-> **Note:** gnullvm builds are valid Windows ARM64 PE32+ binaries, but they require
-> `libunwind.dll` (from `$LLVM_MINGW/aarch64-w64-mingw32/bin/`) to be placed alongside
-> `puck-agent.exe` at runtime. Official release binaries are built by CI using
-> `aarch64-pc-windows-msvc` on `windows-latest`, which produces fully self-contained
-> binaries with no extra DLL requirements. For production deployments, use release
-> binaries or build on a Windows machine with `rustup target add aarch64-pc-windows-msvc`.
-
-Release binaries follow the naming convention `puck-agent-${os}-${arch}[.exe]`:
-
-| Target triple | Release binary |
-|---|---|
-| `x86_64-unknown-linux-gnu` | `puck-agent-linux-amd64` |
-| `aarch64-unknown-linux-gnu` | `puck-agent-linux-arm64` |
-| `x86_64-apple-darwin` | `puck-agent-darwin-amd64` |
-| `aarch64-apple-darwin` | `puck-agent-darwin-arm64` |
-| `x86_64-pc-windows-gnu` | `puck-agent-windows-amd64.exe` |
-| `aarch64-pc-windows-msvc` | `puck-agent-windows-arm64.exe` (CI/release) |
-| `aarch64-pc-windows-gnullvm` | Windows ARM64 local dev (needs `libunwind.dll`) |
-
-### Configure Claude Code (source build)
-
-```json
-{
-  "mcpServers": {
-    "puck": {
-      "command": "/absolute/path/to/puck-scout/mcp/puck-mcp",
-      "args": ["--transport", "stdio", "--config", "/absolute/path/to/puck-scout/mcp/puck-mcp.yaml"],
-      "cwd": "/absolute/path/to/puck-scout/mcp"
-    }
-  }
-}
-```
-
-Replace `/absolute/path/to/puck-scout` with your actual clone path.
-
-### Local end-to-end test
-
-The fastest way to verify a source build works end-to-end:
+The `test/` harness builds both binaries, sets up the server, enrolls a loopback
+agent, and writes `.mcp.json` for you:
 
 ```bash
 cd test
-make test-install   # builds binaries, runs install scripts, writes .mcp.json
-make run-agent      # starts the agent so Claude Code can find it
+make test-install
+make run-agent
 ```
 
-`make test-install` writes `.mcp.json` to the repo root pointing at the test binaries — Claude Code picks it up automatically. Use `make stop` and `make clean` to tear down.
+Open Claude Code in the repo and ask a question. `make stop` / `make clean` tear
+down. (It needs `:50281` free — quit any other `puck-mcp` first.)
 
-### Start agents (manual)
+### Cross-compile
 
-For a specific endpoint, enroll it first to generate the mTLS client cert, then start the agent:
+The MCP server cross-compiles natively:
 
 ```bash
-# On the MCP server host: issue a bootstrap token for this endpoint
-puck-mcp generate-bootstrap-token --hostname myhost --ttl 1h  # explicit; default is now 4h
-
-# On the endpoint: enroll (generates cert material and writes the config)
-puck-agent enroll --server https://<mcp-host>:50281 \
-                  --hostname myhost \
-                  --token-stdin <<< <bootstrap-token>
+cd mcp
+GOOS=linux   GOARCH=arm64 go build -o puck-mcp-linux-arm64    ./cmd/puck-mcp/
+GOOS=windows GOARCH=amd64 go build -o puck-mcp-windows-amd64.exe ./cmd/puck-mcp/
 ```
 
-The enroll command writes a config similar to `demo/agent-template.yaml`.  Paths
-depend on who ran enroll: root installs go under `/etc/puck-agent/`, non-root
-installs (the common case for `bash install-agent.sh` without sudo) go under
-`~/.config/puck-agent/`.
+The agent cross-compiles with `rustup target add <triple>` + a system cross-linker
+(run `cargo` from `agent/`). Note: `cross` currently fails for the agent — it mounts
+only `agent/`, but the build reads `policy/policy.toml` from the repo root; use the
+native toolchain instead. Windows arm64 release binaries use `aarch64-pc-windows-msvc`
+(self-contained); a local `gnullvm` build works but needs `libunwind.dll` alongside
+the `.exe`. Release naming is `puck-{mcp,agent}-<os>-<arch>[.exe]`.
 
-```yaml
-# ~/.config/puck-agent/puck-agent.yaml  (non-root install; written by enroll, mode 0600)
-mcp_server:    "https://<mcp-host>:50281"
-hostname:      "myhost"
-tls_cert_path: "/home/<you>/.config/puck-agent/cert.pem"
-tls_key_path:  "/home/<you>/.config/puck-agent/cert-key.pem"
-tls_ca_path:   "/home/<you>/.config/puck-agent/ca.pem"
-poll_interval_active: 2
-poll_interval_idle: 30
-```
+## Next steps
 
-Then start the agent:
-
-```bash
-./agent/target/release/puck-agent --config ~/.config/puck-agent/puck-agent.yaml
-```
-
----
-
-## Next Steps
-
-- [Architecture overview](architecture.md) — how the components interact
+- [Architecture](architecture.md) — how the components interact
 - [Security model](security.md) — trust boundaries and deployment recommendations
-- [Operations Guide](operations.md) — PKI recovery, CA rotation, and policy engine migration
-- [Skills library](../skills/) — browse investigation playbooks
-- [Contributing](contributing.md) — write a skill (YAML only, no Rust or Go required)
+- [Operations](operations.md) — PKI recovery, CA rotation, policy migration
+- [Skills library](../skills/) — browse the investigation playbooks
