@@ -1,5 +1,5 @@
 name: aws-blast-radius
-version: "1.1.0"
+version: "1.2.0"
 description: "Characterize AWS principals from discovered AccessKeyIds: account, IAM user/role, attached policies, last-used activity, session validity window, dangerous-action simulation, and recent CloudTrail."
 category: ir-triage
 
@@ -468,6 +468,14 @@ guidance:
                  (expires in 6h 28m) — normal engineer activity
       [INCONCLUSIVE-CROSS-ACCOUNT] AKIAFOREIGN12345678 → account
                  999999999999 (operator: escalate to console session)
+
+    Companion tool: `geiger --live` is the operator-side one-shot for a
+    fast liveness + capability read on any of these keys, and the way to
+    triage NON-AWS credentials surfaced alongside them (GitHub / GCP /
+    other API tokens, DB connection strings — see the credential-exposure
+    report's Geiger Blast-Radius Triage block). aws-blast-radius remains
+    the deep AWS-IAM characterization (attached policies,
+    simulate-principal-policy, CloudTrail); geiger does not replace it.
 
     ### Per-Principal Detail (REQUIRED, one block per AccessKeyId
                                 where deep enumeration ran)

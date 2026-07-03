@@ -238,6 +238,31 @@ principal-level severity is computed by the blast-radius skill,
 which has its own wolf-aware matrix (see aws-blast-radius v1.1.0
 docs).
 
+## Companion tool: geiger (operator-side blast-radius triage)
+
+The per-platform blast-radius skills above (aws-blast-radius today) do
+deep, provider-specific principal characterization from inside Puck.
+[`geiger`](https://github.com/puck-security/geiger) (MIT, from the same
+project) is the complementary **operator-side** tool: a read-only,
+cross-provider (~166 credential types) blast-radius triage you run
+out-of-band against the raw secret — *is it still live, what does it
+reach, how bad*. It fills the gap for every credential type this skill
+surfaces that has no dedicated `*-blast-radius` skill yet (GitHub /
+GitLab PATs, GCP / Azure, Slack / Stripe / other API tokens, DB
+connection strings, kubeconfigs).
+
+geiger is a **manual, out-of-band step**, not something Puck runs, for
+two reasons rooted in Puck's invariants: (1) `credential-exposure`
+redacts secret material before returning it to the MCP client, and
+geiger needs the raw secret; (2) geiger's core mode (`geiger --live`)
+makes outbound read-only calls to provider APIs, which Puck's
+network-isolated, read-only agent must never do. So the operator runs
+geiger where the credential lives (the endpoint) or after retrieving it
+out-of-band. The analysis report's **Geiger Blast-Radius Triage** block
+(v1.5.0+) emits the paste-ready command; geiger's verdict is a tier
+(CRITICAL / HIGH / MEDIUM / LOW / INFO / DEAD) and it never prints the
+raw secret.
+
 ## Usage
 
 Start an investigation in your MCP client:
@@ -336,6 +361,13 @@ Commands that would improve coverage if added (file a PR against
 - `trufflehog` — entropy-based detection of credentials that don't
   match a known prefix. Currently out of scope; the skill widens its
   grep pattern set to compensate.
+
+Note the distinction from **geiger** (see "Companion tool" above):
+trufflehog / gitleaks are upstream *detectors* that would run through
+the agent, so adding them needs a `policy/policy.toml` allowlist entry.
+geiger is the downstream *blast-radius* step that runs operator-side
+against the raw secret — so it needs no policy entry and is deliberately
+not part of the agent's command grammar.
 
 ## Out of scope (explicit)
 
