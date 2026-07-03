@@ -12,7 +12,7 @@ use tracing::{debug, error, info, warn};
 /// - Trusts only the pinned CA at `cfg.tls_ca_path`
 /// - Presents the agent's own cert+key for mutual authentication
 /// - Refuses to start if the private key file has loose permissions
-fn build_client(cfg: &AgentConfig) -> anyhow::Result<Client> {
+pub(crate) fn build_client(cfg: &AgentConfig) -> anyhow::Result<Client> {
     use rustls::{
         pki_types::{CertificateDer, PrivateKeyDer},
         ClientConfig, RootCertStore,
