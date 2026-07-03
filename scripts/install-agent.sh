@@ -111,8 +111,43 @@ _ver() {
     if [[ -n "$out" ]]; then printf '%s' "${out%%$'\n'*}"; else printf 'unknown'; fi
 }
 
+# verify_checksum ASSET SUMS NAME — return non-zero unless ASSET's sha256 matches
+# its line in SUMS.  Caller aborts on failure.
+verify_checksum() {
+    local asset="$1" sums="$2" name="$3" expected actual
+    expected=$(awk -v f="$name" '{sub(/^\.\//,"",$2)} $2==f {print $1; exit}' "$sums")
+    [[ -n "$expected" ]] || { echo "ERROR: $name not listed in SHA256SUMS --refusing." >&2; return 8; }
+    if command -v sha256sum >/dev/null 2>&1; then actual=$(sha256sum "$asset" | awk '{print $1}')
+    else actual=$(shasum -a 256 "$asset" | awk '{print $1}'); fi
+    [[ "$actual" == "$expected" ]] || { echo "ERROR: SHA256 mismatch for $name --refusing." >&2; return 9; }
+    return 0
+}
+
+# verify_signature SUMS SUMS_URL — if cosign is present, fetch SUMS.sig/.cert and
+# cosign-verify SUMS against the pinned release identity.  Returns non-zero only
+# on a present-but-INVALID signature.  No cosign, or unpublished sig, is a note
+# (checksum already gates integrity); zero UX tax for casual installs.
+verify_signature() {
+    local sums="$1" sums_url="$2" sig cert rc=0
+    command -v cosign >/dev/null 2>&1 || { echo "  [*] cosign not found --verified by checksum only; install cosign for signature verification." >&2; return 0; }
+    sig=$(mktemp -t puck-sig.XXXXXX); cert=$(mktemp -t puck-cert.XXXXXX)
+    if curl -fsSL --retry 2 --output "$sig" "${sums_url}.sig" && curl -fsSL --retry 2 --output "$cert" "${sums_url}.cert"; then
+        if cosign verify-blob \
+             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+             --certificate-identity-regexp '^https://github\.com/puck-security/puck-scout/\.github/workflows/release\.yml@refs/tags/v' \
+             --signature "$sig" --certificate "$cert" "$sums" >/dev/null 2>&1; then
+            echo "  [+] Signature verified (cosign)."
+        else
+            echo "ERROR: cosign signature verification FAILED for SHA256SUMS --refusing." >&2; rc=10
+        fi
+    else
+        echo "  [*] cosign present but SHA256SUMS.sig/.cert not published --verified by checksum only." >&2
+    fi
+    rm -f "$sig" "$cert"; return $rc
+}
+
 run_agent_upgrade() {
-    local os arch asset url sums_url bin tmp sums old new expected actual
+    local os arch asset url sums_url bin tmp sums old new rc
     os=$(uname -s | tr '[:upper:]' '[:lower:]'); arch=$(uname -m)
     case "$arch" in x86_64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; esac
     case "$os" in linux|darwin) ;; *) echo "ERROR: --upgrade supports Linux/macOS only." >&2; exit 2 ;; esac
@@ -126,15 +161,11 @@ run_agent_upgrade() {
     tmp=$(mktemp -t puck-agent-new.XXXXXX)
     curl -fsSL --retry 2 --output "$tmp" "$url" || { echo "ERROR: download failed: $url" >&2; rm -f "$tmp"; exit 6; }
     sums=$(mktemp -t puck-sums.XXXXXX)
-    if curl -fsSL --retry 2 --output "$sums" "$sums_url"; then
-        expected=$(awk -v f="$asset" '{sub(/^\.\//,"",$2)} $2==f {print $1; exit}' "$sums")
-        [[ -n "$expected" ]] || { echo "ERROR: $asset not listed in SHA256SUMS — refusing to upgrade." >&2; rm -f "$tmp" "$sums"; exit 8; }
-        if command -v sha256sum >/dev/null 2>&1; then actual=$(sha256sum "$tmp" | awk '{print $1}'); else actual=$(shasum -a 256 "$tmp" | awk '{print $1}'); fi
-        [[ "$actual" == "$expected" ]] || { echo "ERROR: SHA256 mismatch for $asset — refusing to upgrade." >&2; rm -f "$tmp" "$sums"; exit 9; }
-        echo "  [+] SHA256 verified"
-    else
-        echo "WARN: could not fetch SHA256SUMS — proceeding without checksum verification." >&2
-    fi
+    curl -fsSL --retry 2 --output "$sums" "$sums_url" \
+        || { echo "ERROR: could not fetch SHA256SUMS --refusing to upgrade unverified." >&2; rm -f "$tmp" "$sums"; exit 7; }
+    verify_checksum "$tmp" "$sums" "$asset" || { rc=$?; rm -f "$tmp" "$sums"; exit $rc; }
+    verify_signature "$sums" "$sums_url"     || { rc=$?; rm -f "$tmp" "$sums"; exit $rc; }
+    echo "  [+] SHA256 verified"
     rm -f "$sums"
     install -m 0755 "$tmp" "$bin" || { echo "ERROR: could not install over $bin (permissions? try sudo)." >&2; rm -f "$tmp"; exit 1; }
     rm -f "$tmp"
@@ -267,37 +298,12 @@ if [[ ! -x "$PUCK_AGENT_BIN" ]] && [[ "$DOWNLOAD_BINARY" -eq 1 ]]; then
         # The SUMS file is published alongside binaries (release.yml).
         echo "  [*] Verifying SHA256..."
         _SUMS_FILE="$(mktemp -t puck-sums.XXXXXX)"
-        trap 'rm -f "$_SUMS_FILE"' EXIT
-        if curl -fsSL --retry 2 --output "$_SUMS_FILE" "$_SUMS_URL"; then
-            # SHA256SUMS lists assets with a leading "./" (e.g. "./puck-agent-linux-amd64"),
-            # so strip it before matching the bare asset name; otherwise $2 never equals
-            # "$_BINARY_NAME" and every install aborts with "not listed in SHA256SUMS".
-            _EXPECTED=$(awk -v f="$_BINARY_NAME" '{sub(/^\.\//, "", $2)} $2 == f {print $1; exit}' "$_SUMS_FILE")
-            if [[ -z "$_EXPECTED" ]]; then
-                echo "ERROR: $_BINARY_NAME not listed in SHA256SUMS --refusing to install." >&2
-                rm -f "$_BIN_PATH"
-                exit 8
-            fi
-            # sha256sum on Linux; shasum -a 256 on macOS (POSIX universal).
-            if command -v sha256sum >/dev/null 2>&1; then
-                _ACTUAL=$(sha256sum "$_BIN_PATH" | awk '{print $1}')
-            else
-                _ACTUAL=$(shasum -a 256 "$_BIN_PATH" | awk '{print $1}')
-            fi
-            if [[ "$_ACTUAL" != "$_EXPECTED" ]]; then
-                echo "ERROR: SHA256 mismatch for $_BINARY_NAME!" >&2
-                echo "       expected: $_EXPECTED" >&2
-                echo "       actual:   $_ACTUAL" >&2
-                echo "       This means the downloaded binary doesn't match what" >&2
-                echo "       was published with this release --refusing to install." >&2
-                rm -f "$_BIN_PATH"
-                exit 9
-            fi
-            echo "  [+] SHA256 verified"
-        else
-            echo "WARN: could not fetch SHA256SUMS --installing without checksum verification." >&2
-            echo "      Network down, or release didn't publish sums.  Continuing." >&2
-        fi
+        curl -fsSL --retry 2 --output "$_SUMS_FILE" "$_SUMS_URL" \
+            || { echo "ERROR: could not fetch SHA256SUMS --refusing to install unverified." >&2; rm -f "$_BIN_PATH" "$_SUMS_FILE"; exit 7; }
+        verify_checksum "$_BIN_PATH" "$_SUMS_FILE" "$_BINARY_NAME" || { rc=$?; rm -f "$_BIN_PATH" "$_SUMS_FILE"; exit $rc; }
+        verify_signature "$_SUMS_FILE" "$_SUMS_URL"                || { rc=$?; rm -f "$_BIN_PATH" "$_SUMS_FILE"; exit $rc; }
+        echo "  [+] SHA256 verified"
+        rm -f "$_SUMS_FILE"
         chmod +x "$_BIN_PATH"
         PUCK_AGENT_BIN="$_BIN_PATH"
         echo "  [+] Installed to $_BIN_PATH"
