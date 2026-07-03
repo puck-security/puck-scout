@@ -11,6 +11,7 @@
 set -euo pipefail
 
 REMOVE_BINARIES=0
+AGENT_ONLY=0
 MCP_PREFIX=""
 AGENT_PREFIX=""
 
@@ -19,6 +20,7 @@ usage() {
 uninstall.sh: remove puck from this host.
 
 Options:
+  --agent-only          remove only the agent (keep the MCP server + Claude registration)
   --remove-binaries     also remove puck-mcp and puck-agent from PATH
   --mcp-prefix DIR      MCP server install dir (default: /etc/puck-mcp or ~/.config/puck-mcp)
   --agent-prefix DIR    agent install dir     (default: /etc/puck-agent or ~/.config/puck-agent)
@@ -28,6 +30,7 @@ EOF
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --agent-only)      AGENT_ONLY=1; shift ;;
         --remove-binaries) REMOVE_BINARIES=1; shift ;;
         --mcp-prefix)      MCP_PREFIX="$2"; shift 2 ;;
         --agent-prefix)    AGENT_PREFIX="$2"; shift 2 ;;
@@ -62,7 +65,9 @@ if [[ "$OS" = "Darwin" ]]; then
         PLIST_DIR="$HOME/Library/LaunchAgents"
         LAUNCHCTL_DOMAIN="gui/$(id -u)"
     fi
-    for LABEL in io.puck.mcp io.puck.agent; do
+    LABELS="io.puck.mcp io.puck.agent"
+    [[ "$AGENT_ONLY" -eq 1 ]] && LABELS="io.puck.agent"
+    for LABEL in $LABELS; do
         PLIST="$PLIST_DIR/$LABEL.plist"
         if [[ -f "$PLIST" ]]; then
             launchctl bootout "$LAUNCHCTL_DOMAIN" "$PLIST" 2>/dev/null || \
@@ -72,7 +77,9 @@ if [[ "$OS" = "Darwin" ]]; then
         fi
     done
 elif command -v systemctl >/dev/null 2>&1; then
-    for SVC in puck-mcp puck-agent; do
+    SVCS="puck-mcp puck-agent"
+    [[ "$AGENT_ONLY" -eq 1 ]] && SVCS="puck-agent"
+    for SVC in $SVCS; do
         if systemctl list-unit-files "${SVC}.service" >/dev/null 2>&1; then
             systemctl disable --now "${SVC}.service" 2>/dev/null || true
             rm -f "/etc/systemd/system/${SVC}.service"
@@ -83,7 +90,7 @@ elif command -v systemctl >/dev/null 2>&1; then
 fi
 
 # ---------------- remove MCP registration ----------------
-if command -v claude >/dev/null 2>&1; then
+if [[ "$AGENT_ONLY" -eq 0 ]] && command -v claude >/dev/null 2>&1; then
     if claude mcp remove puck 2>/dev/null; then
         echo "removed: claude MCP server 'puck'"
     fi
@@ -91,6 +98,7 @@ fi
 
 # ---------------- remove config / PKI / ledger ----------------
 for DIR in "$MCP_PREFIX" "$LEDGER_DIR" "$AGENT_PREFIX"; do
+    if [[ "$AGENT_ONLY" -eq 1 && "$DIR" != "$AGENT_PREFIX" ]]; then continue; fi
     if [[ -d "$DIR" ]]; then
         rm -rf "$DIR"
         echo "removed: $DIR"
@@ -99,7 +107,9 @@ done
 
 # ---------------- optionally remove binaries ----------------
 if [[ "$REMOVE_BINARIES" -eq 1 ]]; then
-    for BIN in puck-mcp puck-agent; do
+    BINS="puck-mcp puck-agent"
+    [[ "$AGENT_ONLY" -eq 1 ]] && BINS="puck-agent"
+    for BIN in $BINS; do
         BIN_PATH="$(command -v "$BIN" 2>/dev/null || true)"
         if [[ -n "$BIN_PATH" ]]; then
             rm -f "$BIN_PATH"
@@ -109,8 +119,14 @@ if [[ "$REMOVE_BINARIES" -eq 1 ]]; then
 fi
 
 echo ""
-echo "puck: uninstall complete."
+if [[ "$AGENT_ONLY" -eq 1 ]]; then
+    echo "puck: agent removed (MCP server left intact)."
+    echo "  Re-enroll this box against a server with a fresh bootstrap token:"
+    echo "    bash install-agent.sh --server https://<server>:50281 --hostname $(hostname) --token-file <file>"
+else
+    echo "puck: uninstall complete."
+    echo "  To reinstall: bash setup-mcp.sh --hostname <hostname>"
+fi
 if [[ "$REMOVE_BINARIES" -eq 0 ]]; then
     echo "  Binaries left in place. Pass --remove-binaries to also delete them."
 fi
-echo "  To reinstall: bash scripts/setup-mcp.sh --hostname <hostname>"
