@@ -28,6 +28,7 @@ TOKEN_STDIN=0
 INSTALL_PREFIX=""
 SERVICE=""
 DOWNLOAD_BINARY=0
+UPGRADE=0
 SERVER_CA_FP=""
 
 usage() {
@@ -54,6 +55,8 @@ Optional:
   --prefix DIR          install dir (default: /etc/puck-agent)
   --service systemd|launchd|none   service manager (default: auto-detect)
   --download-binary     download puck-agent binary automatically (requires internet)
+  --upgrade             swap this host's puck-agent for the latest release (verified),
+                        restart the service, and skip enrollment. No other flags needed.
 
 This script REFUSES to accept --token on argv.  Tokens on argv leak to ps,
 shell history, and parent process command lines.
@@ -70,6 +73,7 @@ while [[ $# -gt 0 ]]; do
         --prefix)      INSTALL_PREFIX="$2"; shift 2 ;;
         --service)     SERVICE="$2"; shift 2 ;;
         --download-binary) DOWNLOAD_BINARY=1; shift ;;
+        --upgrade) UPGRADE=1; shift ;;
         --server-ca-fingerprint) SERVER_CA_FP="$2"; shift 2 ;;
         --token)
             echo "ERROR: --token on argv is rejected --see --token-file / --token-stdin." >&2
@@ -79,6 +83,77 @@ while [[ $# -gt 0 ]]; do
         *) echo "unknown argument: $1" >&2; usage ;;
     esac
 done
+
+# ---------------- upgrade mode: swap the binary in place, then stop ----------------
+# restart_agent_service — best-effort restart so a swapped binary takes effect.
+# Returns 0 if it restarted a service, 1 if none was found.
+restart_agent_service() {
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        if launchctl print "gui/$(id -u)/io.puck.agent" >/dev/null 2>&1; then
+            launchctl kickstart -k "gui/$(id -u)/io.puck.agent" >/dev/null 2>&1 && return 0
+        fi
+        if [[ $EUID -eq 0 ]] && launchctl print "system/io.puck.agent" >/dev/null 2>&1; then
+            launchctl kickstart -k "system/io.puck.agent" >/dev/null 2>&1 && return 0
+        fi
+        return 1
+    fi
+    if command -v systemctl >/dev/null 2>&1 && systemctl cat puck-agent.service >/dev/null 2>&1; then
+        systemctl restart puck-agent >/dev/null 2>&1 && return 0
+    fi
+    return 1
+}
+
+# _ver BIN — first line of "<BIN> --version", or "unknown". Avoids piping to
+# head (which trips `set -o pipefail` if the binary writes >1 line).
+_ver() {
+    local out
+    out="$("$1" --version 2>/dev/null || true)"
+    if [[ -n "$out" ]]; then printf '%s' "${out%%$'\n'*}"; else printf 'unknown'; fi
+}
+
+run_agent_upgrade() {
+    local os arch asset url sums_url bin tmp sums old new expected actual
+    os=$(uname -s | tr '[:upper:]' '[:lower:]'); arch=$(uname -m)
+    case "$arch" in x86_64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; esac
+    case "$os" in linux|darwin) ;; *) echo "ERROR: --upgrade supports Linux/macOS only." >&2; exit 2 ;; esac
+    asset="puck-agent-${os}-${arch}"
+    url="https://github.com/puck-security/puck-scout/releases/latest/download/${asset}"
+    sums_url="https://github.com/puck-security/puck-scout/releases/latest/download/SHA256SUMS"
+    bin="${PUCK_AGENT_BIN:-$(command -v puck-agent || true)}"
+    [[ -x "$bin" ]] || { echo "ERROR: no existing puck-agent found to upgrade. Set PUCK_AGENT_BIN, or enroll first." >&2; exit 6; }
+    old=$(_ver "$bin")
+    echo "  [*] Upgrading puck-agent at $bin (current: $old)"
+    tmp=$(mktemp -t puck-agent-new.XXXXXX)
+    curl -fsSL --retry 2 --output "$tmp" "$url" || { echo "ERROR: download failed: $url" >&2; rm -f "$tmp"; exit 6; }
+    sums=$(mktemp -t puck-sums.XXXXXX)
+    if curl -fsSL --retry 2 --output "$sums" "$sums_url"; then
+        expected=$(awk -v f="$asset" '{sub(/^\.\//,"",$2)} $2==f {print $1; exit}' "$sums")
+        [[ -n "$expected" ]] || { echo "ERROR: $asset not listed in SHA256SUMS — refusing to upgrade." >&2; rm -f "$tmp" "$sums"; exit 8; }
+        if command -v sha256sum >/dev/null 2>&1; then actual=$(sha256sum "$tmp" | awk '{print $1}'); else actual=$(shasum -a 256 "$tmp" | awk '{print $1}'); fi
+        [[ "$actual" == "$expected" ]] || { echo "ERROR: SHA256 mismatch for $asset — refusing to upgrade." >&2; rm -f "$tmp" "$sums"; exit 9; }
+        echo "  [+] SHA256 verified"
+    else
+        echo "WARN: could not fetch SHA256SUMS — proceeding without checksum verification." >&2
+    fi
+    rm -f "$sums"
+    install -m 0755 "$tmp" "$bin" || { echo "ERROR: could not install over $bin (permissions? try sudo)." >&2; rm -f "$tmp"; exit 1; }
+    rm -f "$tmp"
+    new=$(_ver "$bin")
+    echo "  [+] puck-agent: $old  ->  $new"
+    if restart_agent_service; then
+        echo "  [+] Restarted the puck-agent service."
+    else
+        echo "  [*] No puck-agent service detected — restart it so the new binary runs:"
+        echo "        puck-agent serve --config <path>   (or via your service manager)"
+    fi
+    echo ""
+    echo "  Reminder: puck-agent and puck-mcp are versioned together — upgrade the MCP server to the same release too."
+}
+
+if [[ "$UPGRADE" -eq 1 ]]; then
+    run_agent_upgrade
+    exit 0
+fi
 
 [[ -n "$SERVER" ]] || { echo "ERROR: --server is required" >&2; usage; }
 [[ -n "$HOSTNAME_ARG" ]] || { echo "ERROR: --hostname is required" >&2; usage; }
