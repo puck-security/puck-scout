@@ -14,6 +14,11 @@ import (
 // `puck://skill/<name>/<section>` (one section).
 const SkillResourceScheme = "puck://skill/"
 
+// FleetResourceScheme is the URI of the live fleet-roster resource: the
+// endpoint agents currently connected to this server. Unlike skill and
+// reference resources it is a single fixed URI, not a prefix.
+const FleetResourceScheme = "puck://fleet"
+
 // ListResources returns the catalog of resources the server exposes.
 // Today: one "full bundle" resource per loaded skill (the entire
 // guidance + README), one per-section resource for each section the
@@ -72,6 +77,16 @@ func (r *Router) ListResources() []mcp.Resource {
 			MimeType:    "text/markdown",
 		})
 	}
+
+	// The live fleet roster — always present, even with zero connected
+	// agents, so resources/list is never empty and a client can discover
+	// "who is checked in" without a tool call.
+	resources = append(resources, mcp.Resource{
+		URI:         FleetResourceScheme,
+		Name:        "fleet roster",
+		Description: "Endpoint agents currently connected to this Puck server (hostname, OS, version, status) — the live fleet you can investigate.",
+		MimeType:    "text/markdown",
+	})
 	return resources
 }
 
@@ -80,6 +95,11 @@ func (r *Router) ListResources() []mcp.Resource {
 // if the URI is malformed or the addressed resource doesn't exist.
 // See ADR-019.
 func (r *Router) ReadResource(uri string) (string, string, error) {
+	// Live fleet roster (a single fixed URI, matched exactly).
+	if uri == FleetResourceScheme {
+		return r.renderFleetMarkdown(), "text/markdown", nil
+	}
+
 	// Reference docs (cross-skill markdown — translation tables, guides).
 	if rest, ok := strings.CutPrefix(uri, ReferenceResourceScheme); ok {
 		if rest == "" {
