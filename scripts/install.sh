@@ -25,19 +25,30 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 # ---------------- args ----------------
 UPGRADE=0
+SYSTEM=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --upgrade) UPGRADE=1; shift ;;
+        --system) SYSTEM=1; shift ;;
         -h|--help)
             echo "install.sh — one-command local Puck installer."
             echo "  (no args)   fresh install: binaries + MCP server + enroll this host"
             echo "  --upgrade   download the latest binaries and swap them in place"
             echo "              (config, PKI, and enrollment are kept — no re-enroll);"
             echo "              restarts the agent service, then asks you to restart Claude Code"
+            echo "  --system    privileged install: binaries in a root-owned path + a"
+            echo "              system service (default is unprivileged, per-user). Needs root."
             exit 0 ;;
         *) die "unknown argument: $1 (see --help)" ;;
     esac
 done
+
+# --system is a privileged install (root-owned binaries + system service). It
+# requires root and must never silently escalate; fail fast before downloading.
+if [ "$SYSTEM" -eq 1 ] && [ "$(id -u)" -ne 0 ]; then
+    die "--system requires root; re-run with sudo"
+fi
+if [ "$SYSTEM" -eq 1 ]; then SYSTEM_ARGS=(--system); else SYSTEM_ARGS=(); fi
 
 # restart_agent_service — best-effort restart of the puck-agent service so a
 # swapped binary takes effect. Returns 0 if it restarted one, 1 if none found.
@@ -64,6 +75,23 @@ _ver() {
     local out
     out="$("$1" --version 2>/dev/null || true)"
     if [ -n "$out" ]; then printf '%s' "${out%%$'\n'*}"; else printf 'unknown'; fi
+}
+
+# protected_bindir — a guaranteed root-owned, non-world-writable bin dir for
+# --system installs. Linux: /usr/local/bin. macOS: /usr/local/bin only if it is
+# root-owned (Homebrew often owns it), else a fresh root-owned /opt/puck/bin.
+protected_bindir() {
+    if [ "$(uname -s)" = "Darwin" ]; then
+        if [ "$(stat -f '%u' /usr/local/bin 2>/dev/null)" = "0" ] \
+           && [ "$(( 0$(stat -f '%Lp' /usr/local/bin 2>/dev/null || echo 777) & 022 ))" -eq 0 ]; then
+            echo /usr/local/bin
+        else
+            install -d -o 0 -g 0 -m 0755 /opt/puck/bin
+            echo /opt/puck/bin
+        fi
+    else
+        echo /usr/local/bin
+    fi
 }
 
 # ---------------- platform detection ----------------
@@ -109,23 +137,37 @@ if [ "$UPGRADE" -eq 0 ]; then
 fi
 
 # ---------------- verify ----------------
-if curl -fsSL --retry 2 --output "$WORK/SHA256SUMS" "$RELEASE_BASE/SHA256SUMS"; then
-    say "Verifying checksums..."
-    if command -v sha256sum >/dev/null 2>&1; then
-        sum() { sha256sum "$1" | awk '{print $1}'; }
-    else
-        sum() { shasum -a 256 "$1" | awk '{print $1}'; }
-    fi
-    for asset in "$MCP_ASSET" "$AGENT_ASSET"; do
-        # SHA256SUMS lists assets with a leading "./" — strip it before matching.
-        expected="$(awk -v f="$asset" '{sub(/^\.\//, "", $2)} $2 == f {print $1; exit}' "$WORK/SHA256SUMS")"
-        [ -n "$expected" ] || die "$asset not listed in SHA256SUMS — refusing to install."
-        actual="$(sum "$WORK/$asset")"
-        [ "$actual" = "$expected" ] || die "SHA256 mismatch for $asset (expected $expected, got $actual)."
-    done
-    say "Checksums OK."
+curl -fsSL --retry 2 --output "$WORK/SHA256SUMS" "$RELEASE_BASE/SHA256SUMS" \
+    || die "could not fetch SHA256SUMS — refusing to install unverified."
+say "Verifying checksums..."
+if command -v sha256sum >/dev/null 2>&1; then
+    sum() { sha256sum "$1" | awk '{print $1}'; }
 else
-    printf 'WARN: could not fetch SHA256SUMS — installing without checksum verification.\n' >&2
+    sum() { shasum -a 256 "$1" | awk '{print $1}'; }
+fi
+for asset in "$MCP_ASSET" "$AGENT_ASSET"; do
+    # SHA256SUMS lists assets with a leading "./" — strip it before matching.
+    expected="$(awk -v f="$asset" '{sub(/^\.\//, "", $2)} $2 == f {print $1; exit}' "$WORK/SHA256SUMS")"
+    [ -n "$expected" ] || die "$asset not listed in SHA256SUMS — refusing to install."
+    actual="$(sum "$WORK/$asset")"
+    [ "$actual" = "$expected" ] || die "SHA256 mismatch for $asset (expected $expected, got $actual)."
+done
+say "Checksums OK."
+# Signature: cosign-verify SHA256SUMS when cosign is available (no UX tax if not).
+if command -v cosign >/dev/null 2>&1; then
+    if curl -fsSL --retry 2 --output "$WORK/SHA256SUMS.sig"  "$RELEASE_BASE/SHA256SUMS.sig" \
+       && curl -fsSL --retry 2 --output "$WORK/SHA256SUMS.cert" "$RELEASE_BASE/SHA256SUMS.cert"; then
+        cosign verify-blob \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity-regexp '^https://github\.com/puck-security/puck-scout/\.github/workflows/release\.yml@refs/tags/v' \
+            --signature "$WORK/SHA256SUMS.sig" --certificate "$WORK/SHA256SUMS.cert" "$WORK/SHA256SUMS" >/dev/null 2>&1 \
+            || die "cosign signature verification FAILED for SHA256SUMS."
+        say "Signature verified (cosign)."
+    else
+        say "cosign present but SHA256SUMS.sig/.cert not published — verified by checksum only."
+    fi
+else
+    say "cosign not found — verified by checksum only; install cosign for signature verification."
 fi
 
 # ---------------- upgrade: swap binaries in place, then stop ----------------
@@ -158,7 +200,7 @@ if [ "$UPGRADE" -eq 1 ]; then
 fi
 
 # ---------------- install onto PATH ----------------
-BIN_DIR="${PUCK_BIN_DIR:-$HOME/.local/bin}"
+if [ "$SYSTEM" -eq 1 ]; then BIN_DIR="$(protected_bindir)"; else BIN_DIR="${PUCK_BIN_DIR:-$HOME/.local/bin}"; fi
 case ":${PATH}:" in *":$BIN_DIR:"*) ON_PATH=1 ;; *) ON_PATH=0 ;; esac
 mkdir -p "$BIN_DIR"
 # install (not cp) creates a fresh inode, avoiding the macOS Sequoia provenance
@@ -184,7 +226,8 @@ MCP_CONFIG="$MCP_PREFIX/puck-mcp.yaml"
 echo ""
 say "Setting up the MCP server..."
 PUCK_MCP_BIN="$BIN_DIR/puck-mcp" bash "$WORK/setup-mcp.sh" \
-    --hostname "$HN" --service none ${SETUP_PREFIX_ARGS[@]+"${SETUP_PREFIX_ARGS[@]}"} < /dev/null
+    --hostname "$HN" --service none ${SETUP_PREFIX_ARGS[@]+"${SETUP_PREFIX_ARGS[@]}"} \
+    ${SYSTEM_ARGS[@]+"${SYSTEM_ARGS[@]}"} < /dev/null
 
 # ---------------- enroll this machine as an agent ----------------
 echo ""
@@ -207,6 +250,7 @@ else
         PUCK_AGENT_BIN="$BIN_DIR/puck-agent" bash "$WORK/install-agent.sh" \
             --server "https://127.0.0.1:$AGENT_PORT" --hostname "$HN" \
             --token-file "$WORK/token" ${AGENT_PREFIX_ARGS[@]+"${AGENT_PREFIX_ARGS[@]}"} \
+            ${SYSTEM_ARGS[@]+"${SYSTEM_ARGS[@]}"} \
             || printf 'WARN: enrollment failed (see above) — retry after opening Claude Code.\n' >&2
     else
         printf 'WARN: puck-mcp did not come up for enrollment; see %s\n' "$WORK/server.log" >&2
