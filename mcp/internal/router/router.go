@@ -75,6 +75,14 @@ func (r *Router) ToolDefinitions() []mcp.ToolDefinition {
 			},
 		},
 		{
+			Name:        "puck_list_agents",
+			Description: "List the endpoint agents currently checked in (connected) to this Puck server — hostname, OS, agent version/commit, connection status, and last-seen time. Use this to answer questions like \"what agents are checked in\", \"what's in the fleet\", or \"which endpoints can I investigate\"; it needs no active investigation. This is the live connection roster: agents that enrolled a certificate but aren't currently connected are not listed (see `puck-mcp status` on the server).",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		},
+		{
 			Name:        "puck_get_skill_section",
 			Description: "Fetch a single section of the skill bound to an active investigation. Use this for sections puck_investigate intentionally omits to keep its response small: 'fleet_strategy' (call when you finish the pathfinder phase and are ready to fan out), 'remediation_guidance' (call when writing the final analysis), 'readme' (human-facing docs; rarely needed), 'full' (the whole skill body including README). The other section names — 'objective', 'pathfinder_strategy', 'iteration_criteria', 'analysis_template' — are also accepted but are already in puck_investigate's response.",
 			InputSchema: map[string]any{
@@ -253,6 +261,8 @@ func (r *Router) HandleToolCall(params mcp.ToolCallParams) mcp.ToolCallResult {
 		return r.handleContinue(params.Arguments)
 	case "puck_list_skills":
 		return r.handleListSkills()
+	case "puck_list_agents":
+		return r.handleListAgents()
 	case "puck_get_skill_section":
 		return r.handleGetSkillSection(params.Arguments)
 	default:
