@@ -29,6 +29,7 @@ INSTALL_PREFIX=""
 SERVICE=""
 DOWNLOAD_BINARY=0
 UPGRADE=0
+SYSTEM=0
 SERVER_CA_FP=""
 
 usage() {
@@ -57,6 +58,8 @@ Optional:
   --download-binary     download puck-agent binary automatically (requires internet)
   --upgrade             swap this host's puck-agent for the latest release (verified),
                         restart the service, and skip enrollment. No other flags needed.
+  --system              privileged install: root-owned binary + system service
+                        (default is an unprivileged per-user install). Requires root.
 
 This script REFUSES to accept --token on argv.  Tokens on argv leak to ps,
 shell history, and parent process command lines.
@@ -74,6 +77,7 @@ while [[ $# -gt 0 ]]; do
         --service)     SERVICE="$2"; shift 2 ;;
         --download-binary) DOWNLOAD_BINARY=1; shift ;;
         --upgrade) UPGRADE=1; shift ;;
+        --system) SYSTEM=1; shift ;;
         --server-ca-fingerprint) SERVER_CA_FP="$2"; shift 2 ;;
         --token)
             echo "ERROR: --token on argv is rejected --see --token-file / --token-stdin." >&2
@@ -111,14 +115,52 @@ _ver() {
     if [[ -n "$out" ]]; then printf '%s' "${out%%$'\n'*}"; else printf 'unknown'; fi
 }
 
+# verify_checksum ASSET SUMS NAME — return non-zero unless ASSET's sha256 matches
+# its line in SUMS.  Caller aborts on failure.
+verify_checksum() {
+    local asset="$1" sums="$2" name="$3" expected actual
+    expected=$(awk -v f="$name" '{sub(/^\.\//,"",$2)} $2==f {print $1; exit}' "$sums")
+    [[ -n "$expected" ]] || { echo "ERROR: $name not listed in SHA256SUMS --refusing." >&2; return 8; }
+    if command -v sha256sum >/dev/null 2>&1; then actual=$(sha256sum "$asset" | awk '{print $1}')
+    else actual=$(shasum -a 256 "$asset" | awk '{print $1}'); fi
+    [[ "$actual" == "$expected" ]] || { echo "ERROR: SHA256 mismatch for $name --refusing." >&2; return 9; }
+    return 0
+}
+
+# verify_signature SUMS SUMS_URL — if cosign is present, fetch SUMS.sig/.cert and
+# cosign-verify SUMS against the pinned release identity.  Returns non-zero only
+# on a present-but-INVALID signature.  No cosign, or unpublished sig, is a note
+# (checksum already gates integrity); zero UX tax for casual installs.
+verify_signature() {
+    local sums="$1" sums_url="$2" sig cert rc=0
+    command -v cosign >/dev/null 2>&1 || { echo "  [*] cosign not found --verified by checksum only; install cosign for signature verification." >&2; return 0; }
+    sig=$(mktemp -t puck-sig.XXXXXX); cert=$(mktemp -t puck-cert.XXXXXX)
+    if curl -fsSL --retry 2 --output "$sig" "${sums_url}.sig" && curl -fsSL --retry 2 --output "$cert" "${sums_url}.cert"; then
+        if cosign verify-blob \
+             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+             --certificate-identity-regexp '^https://github\.com/puck-security/puck-scout/\.github/workflows/release\.yml@refs/tags/v' \
+             --signature "$sig" --certificate "$cert" "$sums" >/dev/null 2>&1; then
+            echo "  [+] Signature verified (cosign)."
+        else
+            echo "ERROR: cosign signature verification FAILED for SHA256SUMS --refusing." >&2; rc=10
+        fi
+    else
+        echo "  [*] cosign present but SHA256SUMS.sig/.cert not published --verified by checksum only." >&2
+    fi
+    rm -f "$sig" "$cert"; return $rc
+}
+
 run_agent_upgrade() {
-    local os arch asset url sums_url bin tmp sums old new expected actual
+    local os arch asset base url sums_url bin tmp sums old new rc
     os=$(uname -s | tr '[:upper:]' '[:lower:]'); arch=$(uname -m)
     case "$arch" in x86_64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; esac
     case "$os" in linux|darwin) ;; *) echo "ERROR: --upgrade supports Linux/macOS only." >&2; exit 2 ;; esac
     asset="puck-agent-${os}-${arch}"
-    url="https://github.com/puck-security/puck-scout/releases/latest/download/${asset}"
-    sums_url="https://github.com/puck-security/puck-scout/releases/latest/download/SHA256SUMS"
+    # PUCK_RELEASE_BASE overrides the release URL for local testing (point it at a
+    # local http server serving the built binaries + SHA256SUMS).
+    base="${PUCK_RELEASE_BASE:-https://github.com/puck-security/puck-scout/releases/latest/download}"
+    url="$base/${asset}"
+    sums_url="$base/SHA256SUMS"
     bin="${PUCK_AGENT_BIN:-$(command -v puck-agent || true)}"
     [[ -x "$bin" ]] || { echo "ERROR: no existing puck-agent found to upgrade. Set PUCK_AGENT_BIN, or enroll first." >&2; exit 6; }
     old=$(_ver "$bin")
@@ -126,15 +168,11 @@ run_agent_upgrade() {
     tmp=$(mktemp -t puck-agent-new.XXXXXX)
     curl -fsSL --retry 2 --output "$tmp" "$url" || { echo "ERROR: download failed: $url" >&2; rm -f "$tmp"; exit 6; }
     sums=$(mktemp -t puck-sums.XXXXXX)
-    if curl -fsSL --retry 2 --output "$sums" "$sums_url"; then
-        expected=$(awk -v f="$asset" '{sub(/^\.\//,"",$2)} $2==f {print $1; exit}' "$sums")
-        [[ -n "$expected" ]] || { echo "ERROR: $asset not listed in SHA256SUMS — refusing to upgrade." >&2; rm -f "$tmp" "$sums"; exit 8; }
-        if command -v sha256sum >/dev/null 2>&1; then actual=$(sha256sum "$tmp" | awk '{print $1}'); else actual=$(shasum -a 256 "$tmp" | awk '{print $1}'); fi
-        [[ "$actual" == "$expected" ]] || { echo "ERROR: SHA256 mismatch for $asset — refusing to upgrade." >&2; rm -f "$tmp" "$sums"; exit 9; }
-        echo "  [+] SHA256 verified"
-    else
-        echo "WARN: could not fetch SHA256SUMS — proceeding without checksum verification." >&2
-    fi
+    curl -fsSL --retry 2 --output "$sums" "$sums_url" \
+        || { echo "ERROR: could not fetch SHA256SUMS --refusing to upgrade unverified." >&2; rm -f "$tmp" "$sums"; exit 7; }
+    verify_checksum "$tmp" "$sums" "$asset" || { rc=$?; rm -f "$tmp" "$sums"; exit $rc; }
+    verify_signature "$sums" "$sums_url"     || { rc=$?; rm -f "$tmp" "$sums"; exit $rc; }
+    echo "  [+] SHA256 verified"
     rm -f "$sums"
     install -m 0755 "$tmp" "$bin" || { echo "ERROR: could not install over $bin (permissions? try sudo)." >&2; rm -f "$tmp"; exit 1; }
     rm -f "$tmp"
@@ -153,6 +191,13 @@ run_agent_upgrade() {
 if [[ "$UPGRADE" -eq 1 ]]; then
     run_agent_upgrade
     exit 0
+fi
+
+# --system is a privileged, persistent install (root-owned binary + system
+# service).  It requires root and must never silently escalate; fail fast.
+if [[ "$SYSTEM" -eq 1 && $EUID -ne 0 ]]; then
+    echo "ERROR: --system requires root; re-run with sudo." >&2
+    exit 3
 fi
 
 [[ -n "$SERVER" ]] || { echo "ERROR: --server is required" >&2; usage; }
@@ -249,7 +294,7 @@ case "$_OS" in
     *) ;;
 esac
 _BINARY_NAME="puck-agent-${_OS}-${_ARCH}"
-_RELEASE_BASE="https://github.com/puck-security/puck-scout/releases/latest/download"
+_RELEASE_BASE="${PUCK_RELEASE_BASE:-https://github.com/puck-security/puck-scout/releases/latest/download}"
 _BINARY_URL="$_RELEASE_BASE/$_BINARY_NAME"
 _SUMS_URL="$_RELEASE_BASE/SHA256SUMS"
 
@@ -267,37 +312,12 @@ if [[ ! -x "$PUCK_AGENT_BIN" ]] && [[ "$DOWNLOAD_BINARY" -eq 1 ]]; then
         # The SUMS file is published alongside binaries (release.yml).
         echo "  [*] Verifying SHA256..."
         _SUMS_FILE="$(mktemp -t puck-sums.XXXXXX)"
-        trap 'rm -f "$_SUMS_FILE"' EXIT
-        if curl -fsSL --retry 2 --output "$_SUMS_FILE" "$_SUMS_URL"; then
-            # SHA256SUMS lists assets with a leading "./" (e.g. "./puck-agent-linux-amd64"),
-            # so strip it before matching the bare asset name; otherwise $2 never equals
-            # "$_BINARY_NAME" and every install aborts with "not listed in SHA256SUMS".
-            _EXPECTED=$(awk -v f="$_BINARY_NAME" '{sub(/^\.\//, "", $2)} $2 == f {print $1; exit}' "$_SUMS_FILE")
-            if [[ -z "$_EXPECTED" ]]; then
-                echo "ERROR: $_BINARY_NAME not listed in SHA256SUMS --refusing to install." >&2
-                rm -f "$_BIN_PATH"
-                exit 8
-            fi
-            # sha256sum on Linux; shasum -a 256 on macOS (POSIX universal).
-            if command -v sha256sum >/dev/null 2>&1; then
-                _ACTUAL=$(sha256sum "$_BIN_PATH" | awk '{print $1}')
-            else
-                _ACTUAL=$(shasum -a 256 "$_BIN_PATH" | awk '{print $1}')
-            fi
-            if [[ "$_ACTUAL" != "$_EXPECTED" ]]; then
-                echo "ERROR: SHA256 mismatch for $_BINARY_NAME!" >&2
-                echo "       expected: $_EXPECTED" >&2
-                echo "       actual:   $_ACTUAL" >&2
-                echo "       This means the downloaded binary doesn't match what" >&2
-                echo "       was published with this release --refusing to install." >&2
-                rm -f "$_BIN_PATH"
-                exit 9
-            fi
-            echo "  [+] SHA256 verified"
-        else
-            echo "WARN: could not fetch SHA256SUMS --installing without checksum verification." >&2
-            echo "      Network down, or release didn't publish sums.  Continuing." >&2
-        fi
+        curl -fsSL --retry 2 --output "$_SUMS_FILE" "$_SUMS_URL" \
+            || { echo "ERROR: could not fetch SHA256SUMS --refusing to install unverified." >&2; rm -f "$_BIN_PATH" "$_SUMS_FILE"; exit 7; }
+        verify_checksum "$_BIN_PATH" "$_SUMS_FILE" "$_BINARY_NAME" || { rc=$?; rm -f "$_BIN_PATH" "$_SUMS_FILE"; exit $rc; }
+        verify_signature "$_SUMS_FILE" "$_SUMS_URL"                || { rc=$?; rm -f "$_BIN_PATH" "$_SUMS_FILE"; exit $rc; }
+        echo "  [+] SHA256 verified"
+        rm -f "$_SUMS_FILE"
         chmod +x "$_BIN_PATH"
         PUCK_AGENT_BIN="$_BIN_PATH"
         echo "  [+] Installed to $_BIN_PATH"
@@ -395,6 +415,56 @@ unset TOKEN
 chmod 0700 "$PREFIX"
 
 # ---------------- install service ----------------
+
+# assert_exec_path_protected BIN — die unless BIN and its parent dir are
+# root-owned and NOT group/other-writable.  Load-bearing: it stops a root
+# service from executing a file a non-root user could swap out (privesc).
+# --system installs the binary into a root-owned dir so this passes by design.
+assert_exec_path_protected() {
+    local bin="$1" p owner perm dir
+    dir=$(dirname "$bin")
+    for p in "$bin" "$dir"; do
+        [[ -e "$p" ]] || { echo "ERROR: $p does not exist." >&2; exit 12; }
+        if [[ "$(uname -s)" = "Darwin" ]]; then owner=$(stat -f '%u' "$p"); perm=$(stat -f '%Lp' "$p")
+        else owner=$(stat -c '%u' "$p"); perm=$(stat -c '%a' "$p"); fi
+        [[ "$owner" -eq 0 ]] || { echo "ERROR: refusing to run a root service from non-root-owned $p." >&2; exit 12; }
+        [[ $(( 0$perm & 022 )) -eq 0 ]] || { echo "ERROR: refusing --$p is group/other-writable ($perm)." >&2; exit 12; }
+    done
+}
+
+# protected_bindir — echo a guaranteed root-owned, non-world-writable bin dir.
+# Linux: /usr/local/bin.  macOS: /usr/local/bin only if root-owned (Homebrew
+# often owns it), else a fresh root-owned /opt/puck/bin.
+protected_bindir() {
+    if [[ "$(uname -s)" = "Darwin" ]]; then
+        if [[ "$(stat -f '%u' /usr/local/bin 2>/dev/null)" = "0" ]] \
+           && [[ $(( 0$(stat -f '%Lp' /usr/local/bin 2>/dev/null || echo 777) & 022 )) -eq 0 ]]; then
+            echo /usr/local/bin
+        else
+            install -d -o 0 -g 0 -m 0755 /opt/puck/bin
+            echo /opt/puck/bin
+        fi
+    else
+        echo /usr/local/bin
+    fi
+}
+
+# Scope is chosen by --system, NOT by who is root.  Default = per-user service,
+# no escalation ever.  --system = system service: relocate the binary into a
+# root-owned dir and prove it isn't user-writable before a root service runs it.
+if [[ "$SYSTEM" -eq 1 ]]; then
+    SCOPE="system"
+    _bindir=$(protected_bindir)
+    if [[ "$(cd "$(dirname "$PUCK_AGENT_BIN")" && pwd)" != "$_bindir" ]]; then
+        install -m 0755 "$PUCK_AGENT_BIN" "$_bindir/puck-agent"
+        PUCK_AGENT_BIN="$_bindir/puck-agent"
+        echo "  [*] Installed binary to $PUCK_AGENT_BIN (root-owned)."
+    fi
+    assert_exec_path_protected "$PUCK_AGENT_BIN"
+else
+    SCOPE="user"
+fi
+
 if [[ -z "$SERVICE" ]]; then
     if [[ "$(uname -s)" = "Darwin" ]]; then SERVICE="launchd"
     elif command -v systemctl >/dev/null 2>&1; then SERVICE="systemd"
@@ -404,8 +474,9 @@ fi
 
 case "$SERVICE" in
     systemd)
-        UNIT="/etc/systemd/system/puck-agent.service"
-        cat > "$UNIT" <<UNIT
+        if [[ "$SCOPE" = "system" ]]; then
+            UNIT="/etc/systemd/system/puck-agent.service"
+            cat > "$UNIT" <<UNIT
 [Unit]
 Description=Puck endpoint agent
 After=network-online.target
@@ -417,51 +488,68 @@ ExecStart=$PUCK_AGENT_BIN serve --config $CONFIG_FILE
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
 
 [Install]
 WantedBy=multi-user.target
 UNIT
-        systemctl daemon-reload
-        systemctl enable --now puck-agent.service
+            systemctl daemon-reload
+            systemctl enable --now puck-agent.service
+        else
+            # Per-user service --no root, no system paths, runs as this user.
+            UDIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+            mkdir -p "$UDIR"
+            UNIT="$UDIR/puck-agent.service"
+            cat > "$UNIT" <<UNIT
+[Unit]
+Description=Puck endpoint agent (user)
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=$PUCK_AGENT_BIN serve --config $CONFIG_FILE
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target
+UNIT
+            systemctl --user daemon-reload 2>/dev/null || true
+            if systemctl --user enable --now puck-agent.service 2>/dev/null; then
+                loginctl enable-linger "$(id -un)" 2>/dev/null || true
+            else
+                echo "  [*] Could not start the per-user service (no 'systemctl --user' session)." >&2
+                echo "      Start it yourself: $PUCK_AGENT_BIN serve --config $CONFIG_FILE" >&2
+            fi
+        fi
         ;;
     launchd)
-        # Non-root operators cannot write to /Library/LaunchDaemons (system domain).
-        # Fall back to ~/Library/LaunchAgents (user/gui domain) when running without root.
-        #
-        # IMPORTANT: gui/$(id -u) launchd agents only run while the user has a
-        # GUI session.  SSH-only users (e.g., a headless mac mini accessed only
-        # via ssh) will NOT have launchd auto-start the agent at boot --only
-        # when they log in via the GUI.  For SSH-only deployments, run this
-        # script with sudo so it installs to the system domain (which DOES
-        # start at boot regardless of GUI sessions).  We warn here so it isn't
-        # a silent surprise.
-        if [[ $EUID -eq 0 ]]; then
+        # System scope -> /Library/LaunchDaemons (root; starts at boot, headless).
+        # User scope   -> ~/Library/LaunchAgents (gui/<uid>; GUI-session only).
+        # Capture stdout/stderr to a log — launchd otherwise discards it and
+        # background connection failures (cert SAN, unreachable server) are
+        # invisible.  See the "fleet is empty" troubleshooting entry.
+        if [[ "$SCOPE" = "system" ]]; then
             PLIST_DIR="/Library/LaunchDaemons"
             LAUNCHCTL_DOMAIN="system"
+            LOG_PATH="/Library/Logs/puck-agent.log"
         else
             PLIST_DIR="$HOME/Library/LaunchAgents"
             LAUNCHCTL_DOMAIN="gui/$(id -u)"
+            LOG_PATH="$HOME/Library/Logs/puck-agent.log"
             mkdir -p "$PLIST_DIR"
-            # Heuristic: SSH_CONNECTION set + no Aqua GUI session indicates
-            # we're being run by an SSH-only user.  Loginwindow is the macOS
-            # GUI session manager --if launchctl can't find it for this UID,
-            # the user has no GUI session.
-            if [[ -n "${SSH_CONNECTION:-}" ]]; then
-                if ! launchctl print "gui/$(id -u)" >/dev/null 2>&1; then
-                    LAUNCHD_NO_GUI=1
-                    echo "WARN: installed as a user-domain launchd agent (gui/$(id -u))," >&2
-                    echo "      but no GUI session was detected for this UID." >&2
-                    echo "      The agent will only auto-start when the user logs in via the GUI." >&2
-                    echo "      For headless/SSH-only deployments, re-run install-agent.sh under sudo" >&2
-                    echo "      so the agent installs in the system domain and starts at boot." >&2
-                fi
+            # gui/<uid> agents only run while the user has a GUI session; warn
+            # SSH-only users, who'd expect boot-time start (that needs --system).
+            if [[ -n "${SSH_CONNECTION:-}" ]] && ! launchctl print "gui/$(id -u)" >/dev/null 2>&1; then
+                LAUNCHD_NO_GUI=1
+                echo "WARN: installed as a user-domain launchd agent (gui/$(id -u))," >&2
+                echo "      but no GUI session was detected for this UID.  The agent will" >&2
+                echo "      only auto-start when the user logs in via the GUI.  For" >&2
+                echo "      headless/SSH-only hosts, re-run under sudo with --system." >&2
             fi
         fi
-        # Capture the agent's stdout/stderr to a log — otherwise launchd discards
-        # it and background connection failures (cert SAN, unreachable server) are
-        # invisible.  See the "fleet is empty" troubleshooting entry.
-        if [[ $EUID -eq 0 ]]; then LOG_PATH="/Library/Logs/puck-agent.log"
-        else LOG_PATH="$HOME/Library/Logs/puck-agent.log"; fi
         mkdir -p "$(dirname "$LOG_PATH")"
         PLIST="$PLIST_DIR/io.puck.agent.plist"
         cat > "$PLIST" <<PLIST

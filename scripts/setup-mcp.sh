@@ -15,6 +15,9 @@ HOSTNAME_ARG=""
 INSTALL_PREFIX=""
 SERVICE=""
 SERVER_CERT_SANS=""
+SYSTEM=0
+SKILLS_DIR_ARG=""
+NO_REGISTER=0
 
 usage() {
     cat <<EOF >&2
@@ -26,6 +29,11 @@ Required:
 Optional:
   --prefix DIR              install dir (default: /etc/puck-mcp)
   --service systemd|launchd|none
+  --system                  privileged install: root-owned binary + system
+                            service (default is unprivileged, per-user). Needs root.
+  --skills-dir DIR          use DIR as the skills library (default: bundled/empty)
+  --no-register             do not touch ~/.claude.json; print the registration
+                            command instead (used for scratch/test installs)
   --server-cert-sans CSV    additional SANs (default: <hostname>,127.0.0.1,::1)
   --force-new-mcp-token     rotate the mcp_token even if a config already
                             exists (breaks existing MCP-client wiring;
@@ -40,6 +48,9 @@ while [[ $# -gt 0 ]]; do
         --hostname)             HOSTNAME_ARG="$2"; shift 2 ;;
         --prefix)               INSTALL_PREFIX="$2"; shift 2 ;;
         --service)              SERVICE="$2"; shift 2 ;;
+        --system)               SYSTEM=1; shift ;;
+        --skills-dir)           SKILLS_DIR_ARG="$2"; shift 2 ;;
+        --no-register)          NO_REGISTER=1; shift ;;
         --server-cert-sans)     SERVER_CERT_SANS="$2"; shift 2 ;;
         --force-new-mcp-token)  FORCE_NEW_MCP_TOKEN=1; shift ;;
         -h|--help) usage ;;
@@ -47,6 +58,13 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 [[ -n "$HOSTNAME_ARG" ]] || { echo "ERROR: --hostname is required" >&2; usage; }
+
+# --system is a privileged install (root-owned binary + system service). It
+# requires root and must never silently escalate; fail fast.
+if [[ "$SYSTEM" -eq 1 && $EUID -ne 0 ]]; then
+    echo "ERROR: --system requires root; re-run with sudo." >&2
+    exit 3
+fi
 
 # detect_tailscale_hint — if Tailscale is installed and the user hasn't picked
 # a tailnet name, print a one-time tip about the roaming-safe deployment
@@ -130,10 +148,12 @@ _REPO_ROOT=""
 if [[ -n "$_SCRIPT" && -f "$_SCRIPT" ]]; then
     _REPO_ROOT="$(cd "$(dirname "$_SCRIPT")/.." 2>/dev/null && pwd)" || true
 fi
-if [[ -n "$_REPO_ROOT" && -d "$_REPO_ROOT/skills" ]]; then
-    SKILLS_DIR="$_REPO_ROOT/skills"
+if [[ -n "$SKILLS_DIR_ARG" ]]; then
+    SKILLS_DIR="$SKILLS_DIR_ARG"          # explicit (install.sh unpacks the release tarball here)
+elif [[ -n "$_REPO_ROOT" && -d "$_REPO_ROOT/skills" ]]; then
+    SKILLS_DIR="$_REPO_ROOT/skills"       # running from a source checkout
 else
-    SKILLS_DIR="$PREFIX/skills"
+    SKILLS_DIR="$PREFIX/skills"           # curl/binary install with no skills provided
     install -d -m 0755 "$SKILLS_DIR"
 fi
 
@@ -244,6 +264,55 @@ if [[ -z "$SERVICE" ]]; then
 fi
 
 # ---------------- install service ----------------
+
+# assert_exec_path_protected BIN — die unless BIN and its parent dir are
+# root-owned and NOT group/other-writable.  Stops a root service from executing
+# a file a non-root user could swap out (privesc).
+assert_exec_path_protected() {
+    local bin="$1" p owner perm dir
+    dir=$(dirname "$bin")
+    for p in "$bin" "$dir"; do
+        [[ -e "$p" ]] || { echo "ERROR: $p does not exist." >&2; exit 12; }
+        if [[ "$(uname -s)" = "Darwin" ]]; then owner=$(stat -f '%u' "$p"); perm=$(stat -f '%Lp' "$p")
+        else owner=$(stat -c '%u' "$p"); perm=$(stat -c '%a' "$p"); fi
+        [[ "$owner" -eq 0 ]] || { echo "ERROR: refusing to run a root service from non-root-owned $p." >&2; exit 12; }
+        [[ $(( 0$perm & 022 )) -eq 0 ]] || { echo "ERROR: refusing --$p is group/other-writable ($perm)." >&2; exit 12; }
+    done
+}
+
+# protected_bindir — a guaranteed root-owned, non-world-writable bin dir.
+# Linux: /usr/local/bin.  macOS: /usr/local/bin if root-owned (Homebrew often
+# owns it), else a fresh root-owned /opt/puck/bin.
+protected_bindir() {
+    if [[ "$(uname -s)" = "Darwin" ]]; then
+        if [[ "$(stat -f '%u' /usr/local/bin 2>/dev/null)" = "0" ]] \
+           && [[ $(( 0$(stat -f '%Lp' /usr/local/bin 2>/dev/null || echo 777) & 022 )) -eq 0 ]]; then
+            echo /usr/local/bin
+        else
+            install -d -o 0 -g 0 -m 0755 /opt/puck/bin
+            echo /opt/puck/bin
+        fi
+    else
+        echo /usr/local/bin
+    fi
+}
+
+# Scope is chosen by --system, not by who is root.  --system relocates the
+# binary into a root-owned dir and proves it isn't user-writable before a root
+# service runs it.
+if [[ "$SYSTEM" -eq 1 ]]; then
+    SCOPE="system"
+    _bindir=$(protected_bindir)
+    if [[ "$(cd "$(dirname "$PUCK_MCP_BIN")" && pwd)" != "$_bindir" ]]; then
+        install -m 0755 "$PUCK_MCP_BIN" "$_bindir/puck-mcp"
+        PUCK_MCP_BIN="$_bindir/puck-mcp"
+        echo "  [*] Installed binary to $PUCK_MCP_BIN (root-owned)."
+    fi
+    assert_exec_path_protected "$PUCK_MCP_BIN"
+else
+    SCOPE="user"
+fi
+
 if [[ -z "$SERVICE" ]]; then
     if [[ "$(uname -s)" = "Darwin" ]]; then SERVICE="launchd"
     elif command -v systemctl >/dev/null 2>&1; then SERVICE="systemd"
@@ -253,8 +322,12 @@ fi
 
 case "$SERVICE" in
     systemd)
-        UNIT="/etc/systemd/system/puck-mcp.service"
-        cat > "$UNIT" <<UNIT
+        if [[ "$SCOPE" = "system" ]]; then
+            UNIT="/etc/systemd/system/puck-mcp.service"
+            # NOTE: no ProtectSystem/ProtectHome here — unlike the read-only
+            # agent, puck-mcp writes runtime state (audit log, token ledger,
+            # server cert), so filesystem sandboxing would need ReadWritePaths.
+            cat > "$UNIT" <<UNIT
 [Unit]
 Description=Puck MCP server
 After=network-online.target
@@ -270,13 +343,41 @@ NoNewPrivileges=yes
 [Install]
 WantedBy=multi-user.target
 UNIT
-        systemctl daemon-reload
-        systemctl enable --now puck-mcp.service
+            systemctl daemon-reload
+            systemctl enable --now puck-mcp.service
+        else
+            # Per-user service --no root, no system paths, runs as this user.
+            UDIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+            mkdir -p "$UDIR"
+            UNIT="$UDIR/puck-mcp.service"
+            cat > "$UNIT" <<UNIT
+[Unit]
+Description=Puck MCP server (user)
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=$PUCK_MCP_BIN --config $CONFIG_FILE
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target
+UNIT
+            systemctl --user daemon-reload 2>/dev/null || true
+            if systemctl --user enable --now puck-mcp.service 2>/dev/null; then
+                loginctl enable-linger "$(id -un)" 2>/dev/null || true
+            else
+                echo "  [*] Could not start the per-user service (no 'systemctl --user' session)." >&2
+                echo "      Start it yourself: $PUCK_MCP_BIN --config $CONFIG_FILE" >&2
+            fi
+        fi
         ;;
     launchd)
-        # Non-root operators cannot write to /Library/LaunchDaemons (system domain).
-        # Fall back to ~/Library/LaunchAgents (user/gui domain) when running without root.
-        if [[ $EUID -eq 0 ]]; then
+        # System scope -> /Library/LaunchDaemons (root; boots headless).
+        # User scope   -> ~/Library/LaunchAgents (gui/<uid>; GUI-session only).
+        if [[ "$SCOPE" = "system" ]]; then
             PLIST_DIR="/Library/LaunchDaemons"
             LAUNCHCTL_DOMAIN="system"
         else
@@ -427,7 +528,9 @@ CA_FP_PIN="sha256:$CA_FP_HEX"
 STDIO_CMD="$ABS_PUCK_MCP_BIN --transport stdio --config $ABS_CONFIG_FILE"
 
 CLAUDE_STATUS="register manually"
-if command -v claude >/dev/null 2>&1; then
+if [[ "$NO_REGISTER" -eq 1 ]]; then
+    CLAUDE_STATUS="skipped (--no-register)"
+elif command -v claude >/dev/null 2>&1; then
     claude mcp remove puck 2>/dev/null || true
     if claude mcp add --scope user puck -- "$ABS_PUCK_MCP_BIN" --transport stdio --config "$ABS_CONFIG_FILE" 2>/dev/null; then
         CLAUDE_STATUS="registered"
@@ -446,7 +549,7 @@ EOF
 if [[ "$CLAUDE_STATUS" == "registered" ]]; then
     echo "  Claude Code: registered (open Claude Code and type /mcp to verify)"
 else
-    echo "  Claude Code: run this to register:"
+    echo "  Claude Code: not auto-registered ($CLAUDE_STATUS) — run this to register:"
     echo "               claude mcp add --scope user puck -- $STDIO_CMD"
 fi
 
