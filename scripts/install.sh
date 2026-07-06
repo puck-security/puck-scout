@@ -130,12 +130,14 @@ echo ""
 
 # ---------------- download ----------------
 fetch() { curl -fsSL --retry 2 --output "$WORK/$2" "$RELEASE_BASE/$1" || die "download failed: $1"; }
+SKILLS_ASSET="puck-scout-skills.tar.gz"
 say "Downloading binaries..."
 fetch "$MCP_ASSET"       "$MCP_ASSET"
 fetch "$AGENT_ASSET"     "$AGENT_ASSET"
 if [ "$UPGRADE" -eq 0 ]; then
     fetch "setup-mcp.sh"     "setup-mcp.sh"
     fetch "install-agent.sh" "install-agent.sh"
+    fetch "$SKILLS_ASSET"    "$SKILLS_ASSET"
 fi
 
 # ---------------- verify ----------------
@@ -147,7 +149,9 @@ if command -v sha256sum >/dev/null 2>&1; then
 else
     sum() { shasum -a 256 "$1" | awk '{print $1}'; }
 fi
-for asset in "$MCP_ASSET" "$AGENT_ASSET"; do
+VERIFY_ASSETS=("$MCP_ASSET" "$AGENT_ASSET")
+[ "$UPGRADE" -eq 0 ] && VERIFY_ASSETS+=("$SKILLS_ASSET")
+for asset in "${VERIFY_ASSETS[@]}"; do
     # SHA256SUMS lists assets with a leading "./" — strip it before matching.
     expected="$(awk -v f="$asset" '{sub(/^\.\//, "", $2)} $2 == f {print $1; exit}' "$WORK/SHA256SUMS")"
     [ -n "$expected" ] || die "$asset not listed in SHA256SUMS — refusing to install."
@@ -224,12 +228,27 @@ else
 fi
 MCP_CONFIG="$MCP_PREFIX/puck-mcp.yaml"
 
+# ---------------- unpack skills ----------------
+# The release ships the investigation playbooks as a tarball; without this the
+# MCP server starts with ZERO skills. Unpack into the prefix, then strip group/
+# other write so a local non-owner can't tamper (root-owned under --system).
+SKILLS_DIR="$MCP_PREFIX/skills"
+mkdir -p "$SKILLS_DIR"
+tar -xzf "$WORK/$SKILLS_ASSET" -C "$SKILLS_DIR"
+chmod -R go-w "$SKILLS_DIR"
+_nskills=$(find "$SKILLS_DIR" -maxdepth 2 -name skill.yaml 2>/dev/null | wc -l | tr -d ' ')
+say "Installed $_nskills skills to $SKILLS_DIR"
+
 # ---------------- set up the MCP server ----------------
 echo ""
 say "Setting up the MCP server..."
+# Scratch installs (PUCK_PREFIX set) must not clobber the real ~/.claude.json.
+if [ -n "${PUCK_PREFIX:-}" ]; then REGISTER_ARGS=(--no-register); else REGISTER_ARGS=(); fi
 PUCK_MCP_BIN="$BIN_DIR/puck-mcp" bash "$WORK/setup-mcp.sh" \
-    --hostname "$HN" --service none ${SETUP_PREFIX_ARGS[@]+"${SETUP_PREFIX_ARGS[@]}"} \
-    ${SYSTEM_ARGS[@]+"${SYSTEM_ARGS[@]}"} < /dev/null
+    --hostname "$HN" --service none --skills-dir "$SKILLS_DIR" \
+    ${SETUP_PREFIX_ARGS[@]+"${SETUP_PREFIX_ARGS[@]}"} \
+    ${SYSTEM_ARGS[@]+"${SYSTEM_ARGS[@]}"} \
+    ${REGISTER_ARGS[@]+"${REGISTER_ARGS[@]}"} < /dev/null
 
 # ---------------- enroll this machine as an agent ----------------
 echo ""

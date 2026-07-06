@@ -16,6 +16,8 @@ INSTALL_PREFIX=""
 SERVICE=""
 SERVER_CERT_SANS=""
 SYSTEM=0
+SKILLS_DIR_ARG=""
+NO_REGISTER=0
 
 usage() {
     cat <<EOF >&2
@@ -29,6 +31,9 @@ Optional:
   --service systemd|launchd|none
   --system                  privileged install: root-owned binary + system
                             service (default is unprivileged, per-user). Needs root.
+  --skills-dir DIR          use DIR as the skills library (default: bundled/empty)
+  --no-register             do not touch ~/.claude.json; print the registration
+                            command instead (used for scratch/test installs)
   --server-cert-sans CSV    additional SANs (default: <hostname>,127.0.0.1,::1)
   --force-new-mcp-token     rotate the mcp_token even if a config already
                             exists (breaks existing MCP-client wiring;
@@ -44,6 +49,8 @@ while [[ $# -gt 0 ]]; do
         --prefix)               INSTALL_PREFIX="$2"; shift 2 ;;
         --service)              SERVICE="$2"; shift 2 ;;
         --system)               SYSTEM=1; shift ;;
+        --skills-dir)           SKILLS_DIR_ARG="$2"; shift 2 ;;
+        --no-register)          NO_REGISTER=1; shift ;;
         --server-cert-sans)     SERVER_CERT_SANS="$2"; shift 2 ;;
         --force-new-mcp-token)  FORCE_NEW_MCP_TOKEN=1; shift ;;
         -h|--help) usage ;;
@@ -141,10 +148,12 @@ _REPO_ROOT=""
 if [[ -n "$_SCRIPT" && -f "$_SCRIPT" ]]; then
     _REPO_ROOT="$(cd "$(dirname "$_SCRIPT")/.." 2>/dev/null && pwd)" || true
 fi
-if [[ -n "$_REPO_ROOT" && -d "$_REPO_ROOT/skills" ]]; then
-    SKILLS_DIR="$_REPO_ROOT/skills"
+if [[ -n "$SKILLS_DIR_ARG" ]]; then
+    SKILLS_DIR="$SKILLS_DIR_ARG"          # explicit (install.sh unpacks the release tarball here)
+elif [[ -n "$_REPO_ROOT" && -d "$_REPO_ROOT/skills" ]]; then
+    SKILLS_DIR="$_REPO_ROOT/skills"       # running from a source checkout
 else
-    SKILLS_DIR="$PREFIX/skills"
+    SKILLS_DIR="$PREFIX/skills"           # curl/binary install with no skills provided
     install -d -m 0755 "$SKILLS_DIR"
 fi
 
@@ -519,7 +528,9 @@ CA_FP_PIN="sha256:$CA_FP_HEX"
 STDIO_CMD="$ABS_PUCK_MCP_BIN --transport stdio --config $ABS_CONFIG_FILE"
 
 CLAUDE_STATUS="register manually"
-if command -v claude >/dev/null 2>&1; then
+if [[ "$NO_REGISTER" -eq 1 ]]; then
+    CLAUDE_STATUS="skipped (--no-register)"
+elif command -v claude >/dev/null 2>&1; then
     claude mcp remove puck 2>/dev/null || true
     if claude mcp add --scope user puck -- "$ABS_PUCK_MCP_BIN" --transport stdio --config "$ABS_CONFIG_FILE" 2>/dev/null; then
         CLAUDE_STATUS="registered"
@@ -538,7 +549,7 @@ EOF
 if [[ "$CLAUDE_STATUS" == "registered" ]]; then
     echo "  Claude Code: registered (open Claude Code and type /mcp to verify)"
 else
-    echo "  Claude Code: run this to register:"
+    echo "  Claude Code: not auto-registered ($CLAUDE_STATUS) — run this to register:"
     echo "               claude mcp add --scope user puck -- $STDIO_CMD"
 fi
 
