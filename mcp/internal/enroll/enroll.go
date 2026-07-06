@@ -54,7 +54,7 @@ func CAFingerprint(caCertPath string) (string, error) {
 // and shell history.
 func LinuxInstallCommand(hostname, token, serverURL, caFingerprint string) string {
 	return fmt.Sprintf(
-		"curl -fsSL https://raw.githubusercontent.com/puck-security/puck-scout/main/scripts/install-agent.sh"+
+		"curl -fsSL https://github.com/puck-security/puck-scout/releases/latest/download/install-agent.sh"+
 			" | PUCK_BOOTSTRAP_TOKEN='%s' bash -s --"+
 			" --server %s --hostname %s"+
 			" --server-ca-fingerprint %s"+

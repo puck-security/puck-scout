@@ -303,6 +303,7 @@ jobs:
           cp scripts/install-agent.sh dist/install-agent.sh
           cp scripts/setup-mcp.sh dist/setup-mcp.sh
           cp scripts/uninstall.sh dist/uninstall.sh
+          cp scripts/uninstall.ps1 dist/uninstall.ps1
 
       # SBOMs for transparency — one per component, scanned from source
       # (Cargo.lock + go.sum) so transitive deps are captured.  Useful
@@ -390,6 +391,7 @@ jobs:
             dist/install-agent.sh
             dist/setup-mcp.sh
             dist/uninstall.sh
+            dist/uninstall.ps1
             dist/*.sbom.spdx.json
             dist/SHA256SUMS
             dist/SHA256SUMS.sig

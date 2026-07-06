@@ -237,7 +237,7 @@ func printInstallBlock(hostname string, tok *pki.BootstrapToken, serverURL, caFp
 				"  Write-Host '           Status:          Get-ScheduledTask -TaskName puck-agent | Get-ScheduledTaskInfo'\n"+
 				"  Write-Host '           Stop:            Stop-ScheduledTask    -TaskName puck-agent'\n"+
 				"  Write-Host \"           Remove:          Unregister-ScheduledTask -TaskName puck-agent -Confirm:`$false\"\n"+
-				"  Write-Host \"           Full uninstall:  irm https://raw.githubusercontent.com/puck-security/puck-scout/main/scripts/uninstall.ps1 | iex\"\n",
+				"  Write-Host \"           Full uninstall:  irm https://github.com/puck-security/puck-scout/releases/latest/download/uninstall.ps1 | iex\"\n",
 			tok.Plaintext, serverURL, hostname, caFp)
 		return nil
 	}
