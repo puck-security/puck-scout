@@ -151,13 +151,16 @@ verify_signature() {
 }
 
 run_agent_upgrade() {
-    local os arch asset url sums_url bin tmp sums old new rc
+    local os arch asset base url sums_url bin tmp sums old new rc
     os=$(uname -s | tr '[:upper:]' '[:lower:]'); arch=$(uname -m)
     case "$arch" in x86_64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; esac
     case "$os" in linux|darwin) ;; *) echo "ERROR: --upgrade supports Linux/macOS only." >&2; exit 2 ;; esac
     asset="puck-agent-${os}-${arch}"
-    url="https://github.com/puck-security/puck-scout/releases/latest/download/${asset}"
-    sums_url="https://github.com/puck-security/puck-scout/releases/latest/download/SHA256SUMS"
+    # PUCK_RELEASE_BASE overrides the release URL for local testing (point it at a
+    # local http server serving the built binaries + SHA256SUMS).
+    base="${PUCK_RELEASE_BASE:-https://github.com/puck-security/puck-scout/releases/latest/download}"
+    url="$base/${asset}"
+    sums_url="$base/SHA256SUMS"
     bin="${PUCK_AGENT_BIN:-$(command -v puck-agent || true)}"
     [[ -x "$bin" ]] || { echo "ERROR: no existing puck-agent found to upgrade. Set PUCK_AGENT_BIN, or enroll first." >&2; exit 6; }
     old=$(_ver "$bin")
@@ -291,7 +294,7 @@ case "$_OS" in
     *) ;;
 esac
 _BINARY_NAME="puck-agent-${_OS}-${_ARCH}"
-_RELEASE_BASE="https://github.com/puck-security/puck-scout/releases/latest/download"
+_RELEASE_BASE="${PUCK_RELEASE_BASE:-https://github.com/puck-security/puck-scout/releases/latest/download}"
 _BINARY_URL="$_RELEASE_BASE/$_BINARY_NAME"
 _SUMS_URL="$_RELEASE_BASE/SHA256SUMS"
 

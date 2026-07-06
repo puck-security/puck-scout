@@ -12,11 +12,13 @@
 #   PUCK_PREFIX    base dir for config + PKI (default: ~/.config/puck-{mcp,agent}).
 #                  Point this at a scratch dir to try the installer without
 #                  touching an existing setup.
+#   PUCK_RELEASE_BASE  override the release URL (default: GitHub releases/latest).
+#                  Point at a local http server to test against local builds.
 
 set -euo pipefail
 umask 077
 
-RELEASE_BASE="https://github.com/puck-security/puck-scout/releases/latest/download"
+RELEASE_BASE="${PUCK_RELEASE_BASE:-https://github.com/puck-security/puck-scout/releases/latest/download}"
 AGENT_PORT=50281
 HN="$(hostname)"
 
