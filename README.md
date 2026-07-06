@@ -78,6 +78,8 @@ Full schemas in [reference.md](docs/reference.md).
 - **`skills/`** — investigation playbooks (YAML). Contribute one without writing Rust or Go — see [contributing.md](docs/contributing.md).
 - `docs/` · `integrations/` (TheHive, Tines) · `demo/` — docs, third-party integrations, and local-testing scripts.
 
+**Companion tool:** [geiger](https://github.com/puck-security/geiger) is read-only, operator-side blast-radius triage for leaked credentials — once Puck surfaces a key on an endpoint, `geiger --live` tells you whether it's still live, what it reaches, and how bad. The `credential-exposure`, `access-history`, and `aws-blast-radius` skills emit a paste-ready geiger handoff.
+
 ## Safety Model
 
 One shared typed allowlist (`policy/policy.toml`, compiled into both binaries) is enforced independently by the server (before dispatch) and the agent (before execution). Anything outside the grammar is rejected — a compromised server cannot make the agent run anything new. **The worst case of a Puck compromise is unauthorized read access, not modification.** Full threat model in [security.md](docs/security.md).
